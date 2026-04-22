@@ -26,7 +26,7 @@
 ## Требования
 
 - [Heroku](https://github.com/coddrago/Heroku)
-- Аккаунт OpenAI / ChatGPT / API Ключ
+- OpenAI API ключ / ChatGPT аккаунт
 - Установленный `codex` CLI на хосте
 
 > Если `codex CLI` не установлен на хосте — используй `.cdxinstall` для автоматической установки локального Runtime.
