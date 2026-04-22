@@ -79,7 +79,7 @@ or via repository:
 
 ## Switch language
 
-- [Русская документация](codexcli_ru.md)
+- [Русская документация](https://github.com/justidev-heroku/justi-modules/blob/main/Readme/CodexCLI_ru.md)
 
 ---
 
