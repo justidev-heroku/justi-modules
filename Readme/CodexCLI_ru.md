@@ -79,7 +79,7 @@
 
 ## Переключение языка
 
-- [English docs](codexcli_en.md)
+- [English docs](https://github.com/justidev-heroku/justi-modules/blob/main/Readme/CodexCLI_en.md)
 
 ---
 
