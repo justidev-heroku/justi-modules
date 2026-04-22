@@ -22,7 +22,7 @@
 
 ## Документация
 
-- 📖 [Heroku Docs](https://dev.heroku-ub.xyz/) — документация по фреймворку
+- 📖 [Heroku Docs](https://dev.heroku-ub.xyz/) — документация по юзерботу
 - 📖 [Telethon Docs](https://docs.telethon.dev/) — документация по Telethon
 
 ---
