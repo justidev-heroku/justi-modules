@@ -4,12 +4,12 @@
 
 ![CodexCLI Banner](https://raw.githubusercontent.com/sepiol026-wq/GoyModules/refs/heads/main/assets/CodexCLI.png)
 
-**CodexCLI** — модуль для [Heroku](https://github.com/coddrago/Heroku), интегрирующий OpenAI Codex CLI прямо в Telegram. Поддерживает авторизацию через ChatGPT OAuth, стриминг ответов в реальном времени и выполнение Telegram-действий.
+**CodexCLI** — модуль для [Heroku](https://github.com/coddrago/Heroku), интегрирующий OpenAI Codex CLI прямо в Telegram. Поддерживает авторизацию через ChatGPT OAuth, стриминг ответов в реальном времени и выполнение Telegram-действий.  
 **Forked of [QwenCLI](https://github.com/sepiol026-wq/GoyModules/blob/main/QwenCLI.py)**
 
 ---
 
-## Установка
+## Установка модуля
 
 ```
 .dlm https://raw.githubusercontent.com/justidev-heroku/justi-modules/main/modules/CodexCLI.py
@@ -25,16 +25,19 @@
 
 ## Требования
 
-- [Heroku](https://github.com/coddrago/Heroku) userbot
-- Аккаунт OpenAI / ChatGPT
+- [Heroku](https://github.com/coddrago/Heroku)
+- Аккаунт OpenAI / ChatGPT / API Ключ
 - Установленный `codex` CLI на хосте
 
----
-
-## Установка
+> Если `codex CLI` не установлен на хосте — используй `.cdxinstall` для автоматической установки локального Runtime.
 
 ---
-| `.cdxinstall` | Установить локальный Runtime Codex CLI |
+
+## Установка Runtime
+
+| Команда | Описание |
+|---------|----------|
+| `.cdxinstall` | Автоматически установить локальный Runtime Codex CLI |
 
 ---
 
