@@ -19,7 +19,7 @@
 # authors: @justidev
 # Description: Codex CLI module for Heroku.
 
-__version__ = (1, 3, 0)
+__version__ = (1, 3, 3)
 
 import asyncio
 import base64
@@ -56,10 +56,10 @@ from telethon.errors.rpcerrorlist import (
     ChatAdminRequiredError,
     UserNotParticipantError,
 )
-from telethon.tl.functions.channels import GetFullChannelRequest
+from telethon.tl.functions.channels import GetFullChannelRequest, GetParticipantsRequest
 from telethon.tl.functions.channels import InviteToChannelRequest, JoinChannelRequest, LeaveChannelRequest
 from telethon.tl.functions.contacts import BlockRequest, UnblockRequest
-from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.functions.messages import GetFullChatRequest, SendReactionRequest
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import (
     Channel,
@@ -150,10 +150,12 @@ class CodexCLI(loader.Module):
         "cfg_allow_tg_tools_doc": "Разрешить выполнение Telegram tools (системные действия через execute_telegram_action).",
         "cfg_tool_action_budget_doc": "Макс. число tool-действий в рамках одного активного запроса чата.",
         "cfg_tool_destructive_guard_doc": "Требовать confirm=true для опасных действий (ban/delete/purge/block и т.п.).",
+        "cfg_request_timeout_doc": "Таймаут бездействия Codex CLI в секундах до принудительной остановки запроса.",
+        "cfg_startup_timeout_doc": "Таймаут старта Codex CLI в секундах, если процесс не выдал ни stdout, ни stderr.",
         "codex_not_found": "<tg-emoji emoji-id=5332431395266524007>❗️</tg-emoji> <b>CLI-бинарник не найден.</b>\nПроверьте PATH или заполните <code>codex_path</code> в cfg.",
         "codex_auth_missing": "<tg-emoji emoji-id=5332431395266524007>❗️</tg-emoji> <b>Codex CLI не готов к работе.</b>\nНастройте авторизацию.",
         "codex_oauth_missing": "<tg-emoji emoji-id=5332431395266524007>❗️</tg-emoji> <b>Codex login не настроен.</b>\nСделайте <code>codex login</code> на хосте или задайте <code>.cdxauth apikey</code>.",
-        "processing": "<tg-emoji emoji-id=5255971360965930740>🕔</tg-emoji> <b>Codex Studio: обрабатываю запрос...</b>",
+        "processing": "<tg-emoji emoji-id=5255971360965930740>🕔</tg-emoji> <b>CodexCLI: обрабатываю запрос...</b>",
         "queue_wait": "<tg-emoji emoji-id=5415941463764667665>⏳</tg-emoji> <b>Очередь: жду свободный слот выполнения.</b>",
         "bootstrap_wait": "<tg-emoji emoji-id=5415941463764667665>⏳</tg-emoji> <b>Инициализирую runtime Codex CLI...</b>",
         "tool_exec_status": "<tg-emoji emoji-id=5962952497197748583>🔧</tg-emoji> <b>Выполняю Telegram-инструмент:</b> <code>{}</code> <i>(шаг {}/{})</i>",
@@ -221,8 +223,8 @@ class CodexCLI(loader.Module):
         "codex_auth_already": "<tg-emoji emoji-id=5330561907671727296>✅</tg-emoji> <b>Codex OAuth уже настроен.</b>\nДля перевхода используйте <code>.cdxauth auth</code>.",
         "question_prefix": "<tg-emoji emoji-id=5253590213917158323>💬</tg-emoji> <b>Вход:</b>",
         "response_prefix": "<tg-emoji emoji-id=5256230583717079814>📝</tg-emoji> <b>Вывод · {}:</b>",
-        "memory_status": "<tg-emoji emoji-id=5350445475948414299>🧠</tg-emoji> контекст <code>{}/{}</code>",
-        "memory_status_unlimited": "<tg-emoji emoji-id=5350445475948414299>🧠</tg-emoji> контекст <code>{}/∞</code>",
+        "memory_status": "<code>[{}/{}]</code>",
+        "memory_status_unlimited": "<code>[{}/∞]</code>",
         "memory_cleared": "<tg-emoji emoji-id=6007942490076745785>🧹</tg-emoji> <b>Память диалога очищена.</b>",
         "memory_cleared_auto": "<tg-emoji emoji-id=6007942490076745785>🧹</tg-emoji> <b>Память авто-ответа в этом чате очищена.</b>",
         "no_memory_to_clear": "<tg-emoji emoji-id=5278753302023004775>ℹ️</tg-emoji> <b>В этом чате нет истории.</b>",
@@ -384,7 +386,7 @@ class CodexCLI(loader.Module):
         "automod_rules_cleared": "<tg-emoji emoji-id=5255813619702049821>✅</tg-emoji> Правила AI-модератора очищены.",
         "automod_status_on": "<tg-emoji emoji-id=5253780051471642059>🛡</tg-emoji> Automod: <b>ON</b>\nПравила:\n<blockquote>{}</blockquote>",
         "automod_status_off": "<tg-emoji emoji-id=5253780051471642059>🛡</tg-emoji> Automod: <b>OFF</b>",
-        "cfg_check_title": "<tg-emoji emoji-id=5256230583717079814>📋</tg-emoji> <b>Codex Studio · Проверка конфигурации</b>",
+        "cfg_check_title": "<tg-emoji emoji-id=5256230583717079814>📋</tg-emoji> <b>CodexCLI · Проверка конфигурации</b>",
         "codex_models_note": (
             "<tg-emoji emoji-id=5256230583717079814>📋</tg-emoji> <b>Актуальный список (на 2026-04-20):</b>\n"
             "• <code>gpt-5.4</code> — основной выбор для сложных coding/agent задач\n"
@@ -399,6 +401,16 @@ class CodexCLI(loader.Module):
         "resource_profile_updated": "<b>Профиль ресурсов обновлен:</b> <code>{}</code>",
         "tg_tools_disabled_error": "telegram tools disabled by config (allow_tg_tools=False)",
     }
+    if "_cls_doc" not in strings and __doc__:
+        strings["_cls_doc"] = (__doc__ or "").strip()
+    strings_ru = {**strings, **locals().get("strings_ru", {})}
+    strings_uk = {**strings, **locals().get("strings_ua", {}), **locals().get("strings_uk", {})}
+    strings_de = {**strings, **locals().get("strings_de", {})}
+    strings_jp = {**strings, **locals().get("strings_jp", {})}
+    strings_neofit = {**strings, **locals().get("strings_neofit", {})}
+    strings_tiktok = {**strings, **locals().get("strings_tiktok", {})}
+    strings_leet = {**strings, **locals().get("strings_leet", {})}
+    strings_uwu = {**strings, **locals().get("strings_uwu", {})}
 
     _PHASE_EMOJI = {
         "starting": "<tg-emoji emoji-id=5255971360965930740>🕔</tg-emoji>",
@@ -613,6 +625,18 @@ class CodexCLI(loader.Module):
                 True,
                 self.strings["cfg_tool_destructive_guard_doc"],
                 validator=loader.validators.Boolean(),
+            ),
+            loader.ConfigValue(
+                "request_timeout",
+                CODEX_TIMEOUT,
+                self.strings["cfg_request_timeout_doc"],
+                validator=loader.validators.Integer(minimum=30, maximum=3600),
+            ),
+            loader.ConfigValue(
+                "startup_timeout",
+                max(CODEX_STARTUP_TIMEOUT, 45),
+                self.strings["cfg_startup_timeout_doc"],
+                validator=loader.validators.Integer(minimum=10, maximum=600),
             ),
         )
         self.prompt_presets = []
@@ -2166,6 +2190,16 @@ class CodexCLI(loader.Module):
                     f"{tool_action} · {elapsed}s", agent_tool_step, max_tool_turns
                 )
                 tool_result = await self._execute_telegram_tool(chat_id, tool_json_str)
+                tool_summary = ""
+                with contextlib.suppress(Exception):
+                    tool_result_json = json.loads(tool_result)
+                    if tool_result_json.get("status") == "success":
+                        tool_summary = self._format_tool_success_details(
+                            tool_result_json.get("details") or {}
+                        )
+                tool_summary_block = ""
+                if tool_summary:
+                    tool_summary_block = f"[SYSTEM TOOL SUMMARY]\n{tool_summary}\n"
                 now = int(datetime.utcnow().timestamp())
                 history_override.extend(
                     [
@@ -2180,6 +2214,7 @@ class CodexCLI(loader.Module):
                             "type": "text",
                             "content": (
                                 f"[SYSTEM TOOL RESULT]\n{tool_result}\n"
+                                f"{tool_summary_block}"
                                 "Продолжай выполнение задачи.."
                             ),
                             "date": now,
@@ -2560,8 +2595,8 @@ class CodexCLI(loader.Module):
                 msg_obj, fallback=base_message_id
             )
             text_to_send = (
-                f"<b>Codex Studio</b>\n"
-                f"{model_info} · {mem_ind}\n\n"
+                f"<b>CodexCLI</b>\n"
+                f"{model_info}\n{mem_ind}\n\n"
                 f"{self.strings['question_prefix']}\n{question_html}\n\n"
                 f"{self.strings['response_prefix'].format(utils.escape_html(label))}\n{formatted_body}"
             )
@@ -2575,8 +2610,8 @@ class CodexCLI(loader.Module):
                 chunks = self._paginate_text(result_text, 3000)
                 uid = uuid.uuid4().hex[:6]
                 header = (
-                    f"<b>Codex Studio</b>\n"
-                    f"{model_info} · {mem_ind}\n\n"
+                    f"<b>CodexCLI</b>\n"
+                    f"{model_info}\n{mem_ind}\n\n"
                     f"{self.strings['question_prefix']}\n<blockquote>{utils.escape_html(display_prompt[:100])}</blockquote>\n\n"
                     f"{self.strings['response_prefix'].format(utils.escape_html(label))}\n"
                 )
@@ -2662,33 +2697,181 @@ class CodexCLI(loader.Module):
                 self._request_sessions.pop(chat_id, None)
         return None if impersonation_mode else ""
 
+    def _format_actor_compact(self, item: dict) -> str:
+        if not isinstance(item, dict):
+            return "Unknown"
+        name = str(item.get("name") or "Без имени").strip()
+        username = str(item.get("username") or "").strip()
+        actor_id = item.get("id")
+        bits = [name]
+        if username:
+            bits.append(f"@{username}")
+        if actor_id not in (None, ""):
+            bits.append(f"ID:{actor_id}")
+        if item.get("bot"):
+            bits.append("бот")
+        role = str(item.get("role") or "").strip().lower()
+        if role == "owner":
+            bits.append("owner")
+        rank = str(item.get("rank") or "").strip()
+        if rank:
+            bits.append(f"rank={rank}")
+        return " | ".join(bits)
+
+    async def _get_chat_admin_snapshot(self, entity):
+        snapshot = {"owner": None, "admins": [], "count": 0}
+        if entity is None or isinstance(entity, User):
+            return snapshot
+
+        def _append_admin(user_obj, seen_ids, role="admin", rank=None):
+            if not user_obj:
+                return
+            admin_id = getattr(user_obj, "id", None)
+            if admin_id in seen_ids:
+                return
+            seen_ids.add(admin_id)
+            item = {
+                "id": admin_id,
+                "username": getattr(user_obj, "username", None),
+                "name": get_display_name(user_obj) or "Без имени",
+                "bot": bool(getattr(user_obj, "bot", False)),
+                "role": "owner" if role == "owner" else "admin",
+                "rank": rank or None,
+            }
+            if item["role"] == "owner" and snapshot["owner"] is None:
+                snapshot["owner"] = dict(item)
+            snapshot["admins"].append(item)
+
+        seen_ids = set()
+
+        if isinstance(entity, Channel):
+            with contextlib.suppress(Exception):
+                participants = await self.client(
+                    GetParticipantsRequest(
+                        channel=entity,
+                        filter=tg_types.ChannelParticipantsAdmins(),
+                        offset=0,
+                        limit=200,
+                        hash=0,
+                    )
+                )
+                users_by_id = {
+                    getattr(one, "id", None): one
+                    for one in (getattr(participants, "users", None) or [])
+                }
+                for participant in getattr(participants, "participants", None) or []:
+                    user_obj = users_by_id.get(getattr(participant, "user_id", None))
+                    if not user_obj:
+                        continue
+                    role = (
+                        "owner"
+                        if participant.__class__.__name__.lower().endswith("creator")
+                        else "admin"
+                    )
+                    _append_admin(
+                        user_obj,
+                        seen_ids,
+                        role=role,
+                        rank=getattr(participant, "rank", None),
+                    )
+
+        if isinstance(entity, Chat) and not snapshot["admins"]:
+            with contextlib.suppress(Exception):
+                full_chat = await self.client(GetFullChatRequest(chat_id=entity.id))
+                users_by_id = {
+                    getattr(one, "id", None): one
+                    for one in (getattr(full_chat, "users", None) or [])
+                }
+                participants = getattr(
+                    getattr(getattr(full_chat, "full_chat", None), "participants", None),
+                    "participants",
+                    None,
+                ) or []
+                for participant in participants:
+                    class_name = participant.__class__.__name__.lower()
+                    if not class_name.endswith("creator") and not class_name.endswith("admin"):
+                        continue
+                    user_obj = users_by_id.get(getattr(participant, "user_id", None))
+                    if not user_obj:
+                        continue
+                    role = "owner" if class_name.endswith("creator") else "admin"
+                    _append_admin(user_obj, seen_ids, role=role, rank=None)
+
+        if not snapshot["admins"]:
+            with contextlib.suppress(Exception):
+                async for user_obj in self.client.iter_participants(
+                    entity, filter=tg_types.ChannelParticipantsAdmins()
+                ):
+                    role = "owner" if bool(getattr(user_obj, "creator", False)) else "admin"
+                    _append_admin(
+                        user_obj,
+                        seen_ids,
+                        role=role,
+                        rank=getattr(user_obj, "rank", None),
+                    )
+
+        snapshot["admins"].sort(
+            key=lambda item: (
+                0 if str(item.get("role") or "").lower() == "owner" else 1,
+                str(item.get("name") or "").lower(),
+            )
+        )
+        snapshot["count"] = len(snapshot["admins"])
+        if snapshot["owner"] is None:
+            for item in snapshot["admins"]:
+                if str(item.get("role") or "").lower() == "owner":
+                    snapshot["owner"] = dict(item)
+                    break
+        return snapshot
+
     def _format_tool_success_details(self, details: dict) -> str:
         if not isinstance(details, dict):
             return ""
         action_done = str(details.get("action") or "").strip().lower()
-        if action_done != "get_chat_admins":
-            return ""
+        if action_done == "get_chat_admins":
+            admins = details.get("admins")
+            if not isinstance(admins, list):
+                admins = []
+            if not admins:
+                return "Не удалось найти админов в этом чате."
 
-        admins = details.get("admins")
-        if not isinstance(admins, list):
-            admins = []
-        if not admins:
-            return "Не удалось найти админов в этом чате."
+            total = int(details.get("count") or len(admins))
+            owner = details.get("owner") if isinstance(details.get("owner"), dict) else None
+            lines = [f"Админы чата ({total}):"]
+            if owner:
+                lines.append(f"Owner: {self._format_actor_compact(owner)}")
+            for idx, admin in enumerate(admins[:30], start=1):
+                if not isinstance(admin, dict):
+                    continue
+                lines.append(f"{idx}. {self._format_actor_compact(admin)}")
+            if len(admins) > 30:
+                lines.append(f"… и ещё {len(admins) - 30}.")
+            return "\n".join(lines)
 
-        total = int(details.get("count") or len(admins))
-        lines = [f"Админы чата ({total}):"]
-        for idx, admin in enumerate(admins[:30], start=1):
-            if not isinstance(admin, dict):
-                continue
-            name = str(admin.get("name") or "Без имени")
-            username = str(admin.get("username") or "").strip()
-            admin_id = admin.get("id")
-            bot_mark = " [бот]" if admin.get("bot") else ""
-            uname_part = f"@{username}" if username else "без username"
-            lines.append(f"{idx}. {name} ({uname_part}) — ID: {admin_id}{bot_mark}")
-        if len(admins) > 30:
-            lines.append(f"… и ещё {len(admins) - 30}.")
-        return "\n".join(lines)
+        if action_done == "get_chat_info":
+            owner = details.get("owner") if isinstance(details.get("owner"), dict) else None
+            admins = details.get("admins_preview")
+            if not isinstance(admins, list):
+                admins = []
+            lines = [
+                f"Чат: {details.get('title') or 'Unknown'}",
+                f"Тип: {details.get('chat_type') or 'unknown'}",
+            ]
+            username = str(details.get("username") or "").strip()
+            if username:
+                lines.append(f"Username: @{username}")
+            if details.get("target_chat") is not None:
+                lines.append(f"ID: {details.get('target_chat')}")
+            if owner:
+                lines.append(f"Owner: {self._format_actor_compact(owner)}")
+            if admins:
+                lines.append("Админы: " + "; ".join(self._format_actor_compact(one) for one in admins[:8] if isinstance(one, dict)))
+            about = str(details.get("about") or "").strip()
+            if about and about != "—":
+                lines.append(f"About: {about}")
+            return "\n".join(lines)
+
+        return ""
 
     async def _execute_telegram_tool(self, chat_id: int, tool_json_str: str) -> str:
         if not self.config["allow_tg_tools"]:
@@ -2715,6 +2898,21 @@ class CodexCLI(loader.Module):
             except Exception:
                 value = default
             return max(1, min(maximum, value))
+
+        def _as_bool(raw_value, default=False):
+            if isinstance(raw_value, bool):
+                return raw_value
+            if raw_value is None:
+                return default
+            return str(raw_value).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "ok",
+                "confirm",
+                "on",
+            }
 
         def _entity_score(query_text: str, haystack: str):
             query = (query_text or "").strip().lower()
@@ -2750,6 +2948,75 @@ class CodexCLI(loader.Module):
                     return entity
                 raise
 
+        def _entity_kind(entity):
+            if isinstance(entity, User):
+                return "bot" if bool(getattr(entity, "bot", False)) else "user"
+            if isinstance(entity, Channel):
+                return (
+                    "supergroup"
+                    if bool(getattr(entity, "megagroup", False))
+                    else "channel"
+                )
+            if isinstance(entity, Chat):
+                return "group"
+            return (getattr(entity, "__class__", object).__name__ or "entity").lower()
+
+        def _message_link_for(entity, message_id):
+            try:
+                message_id = int(message_id)
+            except Exception:
+                return ""
+            if message_id <= 0:
+                return ""
+            username = getattr(entity, "username", None)
+            if username:
+                return f"https://t.me/{username}/{message_id}"
+            if isinstance(entity, Channel):
+                entity_id = getattr(entity, "id", None)
+                if entity_id:
+                    return f"https://t.me/c/{int(entity_id)}/{message_id}"
+            if isinstance(entity, User):
+                entity_id = getattr(entity, "id", None)
+                if entity_id:
+                    return f"tg://openmessage?user_id={int(entity_id)}&message_id={message_id}"
+            return ""
+
+        async def _describe_entity(entity):
+            if entity is None:
+                return {}
+            info = {
+                "id": getattr(entity, "id", None),
+                "peer_id": None,
+                "type": _entity_kind(entity),
+                "name": get_display_name(entity) or "",
+                "username": getattr(entity, "username", None),
+                "phone": getattr(entity, "phone", None) if isinstance(entity, User) else None,
+                "bot": bool(getattr(entity, "bot", False)),
+                "verified": bool(getattr(entity, "verified", False)),
+                "premium": bool(getattr(entity, "premium", False)),
+                "scam": bool(getattr(entity, "scam", False)),
+                "fake": bool(getattr(entity, "fake", False)),
+            }
+            with contextlib.suppress(Exception):
+                info["peer_id"] = get_peer_id(entity)
+            if isinstance(entity, User):
+                info["first_name"] = getattr(entity, "first_name", None)
+                info["last_name"] = getattr(entity, "last_name", None)
+                info["deleted"] = bool(getattr(entity, "deleted", False))
+                info["self"] = bool(getattr(entity, "self", False))
+                info["contact"] = bool(getattr(entity, "contact", False))
+                info["mutual_contact"] = bool(
+                    getattr(entity, "mutual_contact", False)
+                )
+                status = getattr(entity, "status", None)
+                if status is not None:
+                    info["status"] = getattr(status, "__class__", object).__name__
+            if isinstance(entity, Channel):
+                info["broadcast"] = bool(getattr(entity, "broadcast", False))
+                info["megagroup"] = bool(getattr(entity, "megagroup", False))
+                info["gigagroup"] = bool(getattr(entity, "gigagroup", False))
+            return info
+
         async def _collect_target_messages(
             target_entity, target_value: str, limit: int, scan_limit: int = 1200
         ):
@@ -2776,6 +3043,112 @@ class CodexCLI(loader.Module):
                 if len(matches) >= limit:
                     break
             return matches, scanned
+
+        def _extract_message_ids(payload: dict):
+            raw_ids = []
+            if payload.get("message_id") not in (None, ""):
+                raw_ids.append(payload.get("message_id"))
+            for key in ("message_ids", "ids"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    raw_ids.extend(value)
+            parsed_ids = []
+            for raw_id in raw_ids:
+                try:
+                    parsed_ids.append(int(raw_id))
+                except Exception:
+                    continue
+            seen = set()
+            unique_ids = []
+            for msg_id in parsed_ids:
+                if msg_id <= 0 or msg_id in seen:
+                    continue
+                seen.add(msg_id)
+                unique_ids.append(msg_id)
+            return unique_ids
+
+        async def _collect_recent_message_ids(
+            entity,
+            limit: int,
+            scan_limit: int = 1200,
+            sender_id=None,
+            outgoing=None,
+        ):
+            ids = []
+            scanned = 0
+            scan_cap = _normalize_limit(scan_limit, default=max(limit * 8, 200), maximum=5000)
+            async for msg in self.client.iter_messages(entity, limit=scan_cap):
+                scanned += 1
+                if sender_id is not None and getattr(msg, "sender_id", None) != sender_id:
+                    continue
+                if outgoing is True and not bool(getattr(msg, "out", False)):
+                    continue
+                if outgoing is False and bool(getattr(msg, "out", False)):
+                    continue
+                msg_id = getattr(msg, "id", None)
+                if not msg_id:
+                    continue
+                ids.append(int(msg_id))
+                if len(ids) >= limit:
+                    break
+            return ids, scanned
+
+        async def _delete_message_ids(entity, message_ids, revoke=True):
+            deleted = []
+            for idx in range(0, len(message_ids), 100):
+                chunk = [int(mid) for mid in message_ids[idx : idx + 100] if int(mid) > 0]
+                if not chunk:
+                    continue
+                await self.client.delete_messages(entity, chunk, revoke=revoke)
+                deleted.extend(chunk)
+            return deleted
+
+        def _message_has_media_kind(msg, media_kind: str):
+            kind = (media_kind or "").strip().lower()
+            if kind == "photo":
+                return bool(getattr(msg, "photo", None))
+            if kind == "video":
+                return bool(getattr(msg, "video", None))
+            if kind == "audio":
+                return bool(getattr(msg, "audio", None))
+            if kind == "voice":
+                return bool(getattr(msg, "voice", None))
+            if kind == "gif":
+                return bool(getattr(msg, "gif", None))
+            if kind == "document":
+                return bool(getattr(msg, "document", None)) and not any(
+                    bool(getattr(msg, attr, None))
+                    for attr in ("photo", "video", "voice", "gif", "audio")
+                )
+            return bool(getattr(msg, "media", None))
+
+        async def _search_media_messages(
+            entity,
+            media_kind: str,
+            limit: int,
+            scan_limit: int,
+            query_text: str = "",
+            from_user=None,
+        ):
+            from_user_id = None
+            if from_user not in (None, ""):
+                user_entity = await _resolve_target_entity(from_user, chat_id)
+                from_user_id = getattr(user_entity, "id", None)
+            results = []
+            scanned = 0
+            async for msg in self.client.iter_messages(entity, limit=scan_limit):
+                scanned += 1
+                if from_user_id and getattr(msg, "sender_id", None) != from_user_id:
+                    continue
+                if not _message_has_media_kind(msg, media_kind):
+                    continue
+                content = (getattr(msg, "message", None) or "").strip()
+                if query_text and query_text not in content.lower():
+                    continue
+                results.append(await _serialize_message(entity, msg))
+                if len(results) >= limit:
+                    break
+            return results, scanned
 
         async def _serialize_message(entity, msg):
             sender = None
@@ -2806,6 +3179,42 @@ class CodexCLI(loader.Module):
                 "link": link,
             }
 
+        async def _serialize_message_context(entity, msg):
+            payload = await _serialize_message(entity, msg)
+            payload["out"] = bool(getattr(msg, "out", False))
+            payload["mentioned"] = bool(getattr(msg, "mentioned", False))
+            payload["silent"] = bool(getattr(msg, "silent", False))
+            payload["post"] = bool(getattr(msg, "post", False))
+            payload["edit_date"] = str(getattr(msg, "edit_date", "") or "")
+            payload["grouped_id"] = getattr(msg, "grouped_id", None)
+            payload["link"] = (
+                _message_link_for(entity, getattr(msg, "id", None))
+                or payload.get("link")
+                or ""
+            )
+            sender = None
+            with contextlib.suppress(Exception):
+                sender = await msg.get_sender()
+            if sender is not None:
+                payload["sender"] = await _describe_entity(sender)
+            reply_id = getattr(msg, "reply_to_msg_id", None)
+            if reply_id:
+                with contextlib.suppress(Exception):
+                    reply_msg = await self.client.get_messages(entity, ids=int(reply_id))
+                    if reply_msg:
+                        payload["reply_to"] = {
+                            "message_id": getattr(reply_msg, "id", None),
+                            "text": (getattr(reply_msg, "message", None) or "")[:500],
+                            "sender_id": getattr(reply_msg, "sender_id", None),
+                        }
+            reactions = getattr(msg, "reactions", None)
+            if reactions is not None:
+                results = getattr(reactions, "results", None) or []
+                payload["reactions_count"] = sum(
+                    int(getattr(one, "count", 0) or 0) for one in results
+                )
+            return payload
+
         async def _get_replied_sender_from_request():
             target_msg = await self._get_request_reply_message(chat_id)
             if not target_msg:
@@ -2820,6 +3229,32 @@ class CodexCLI(loader.Module):
                 "username": (getattr(sender, "username", None) or "").lower().lstrip("@"),
                 "name": (get_display_name(sender) or "").strip(),
             }
+
+        async def _get_replied_message_from_request():
+            return await self._get_request_reply_message(chat_id)
+
+        def _uses_current_chat(target_value):
+            if target_value in (None, "", chat_id):
+                return True
+            if isinstance(target_value, str):
+                raw = target_value.strip()
+                if not raw:
+                    return True
+                if raw in {"here", "current", "this", "this_chat", "thischat"}:
+                    return True
+                if re.fullmatch(r"-?\d+", raw):
+                    with contextlib.suppress(Exception):
+                        return int(raw) == int(chat_id)
+            return False
+
+        async def _get_reply_message_id_if_applicable(target_value):
+            replied_msg = await _get_replied_message_from_request()
+            if not replied_msg:
+                return None
+            if not _uses_current_chat(target_value):
+                return None
+            reply_mid = getattr(replied_msg, "id", None)
+            return int(reply_mid) if reply_mid else None
 
         async def _get_request_author_from_session():
             session = self._request_sessions.get(chat_id) or {}
@@ -2865,16 +3300,7 @@ class CodexCLI(loader.Module):
                 or tool_payload.get("disable_pretty")
                 or style in {"plain", "raw", "none"}
             )
-            auto_pretty = bool(
-                not explicit_pretty
-                and not disable_pretty
-                and action_name in {
-                    "send_message",
-                    "send_message_last",
-                    "find_and_send_message",
-                    "send_bulk_messages",
-                }
-            )
+            auto_pretty = False
             pretty = explicit_pretty or auto_pretty
             parse_mode = str(tool_payload.get("parse_mode") or "").strip().lower() or None
             if parse_mode not in {None, "html", "md", "markdown"}:
@@ -2898,9 +3324,9 @@ class CodexCLI(loader.Module):
                 header = str(tool_payload.get("header") or "").strip()
                 if not header:
                     header = (
-                        f"{sender_label} передал вам сообщение"
+                        f"{sender_label}:"
                         if sender_label
-                        else "Вам передали сообщение"
+                        else "Сообщение"
                     )
                 if "<tg-emoji" in text.lower():
                     body = self._safe_emoji_html(text)
@@ -3123,7 +3549,7 @@ class CodexCLI(loader.Module):
                 "autopipeline": "smart_flow",
                 "ban": "ban_user",
                 "banuser": "ban_user",
-                "blockuser": "ban_user",
+                "blockuserchat": "ban_user",
                 "blacklist": "ban_user",
                 "blacklistuser": "ban_user",
                 "kick": "kick_user",
@@ -3131,7 +3557,7 @@ class CodexCLI(loader.Module):
                 "removeuser": "kick_user",
                 "unban": "unban_user",
                 "unbanuser": "unban_user",
-                "unblockuser": "unban_user",
+                "unblockuserchat": "unban_user",
                 "mute": "mute_user",
                 "muteuser": "mute_user",
                 "readonly": "mute_user",
@@ -3156,8 +3582,10 @@ class CodexCLI(loader.Module):
                 "chatmod": "get_moderation_capabilities",
                 "blockpm": "block_user",
                 "block": "block_user",
+                "blockuser": "block_user",
                 "unblock": "unblock_user",
                 "unblockpm": "unblock_user",
+                "unblockuser": "unblock_user",
                 "markread": "mark_chat_read",
                 "readchat": "mark_chat_read",
                 "join": "join_chat",
@@ -3174,6 +3602,56 @@ class CodexCLI(loader.Module):
                 "clearchat": "purge_chat_messages",
                 "restrictmedia": "restrict_user_media",
                 "unrestrictmedia": "unrestrict_user_media",
+                "cleardialog": "clear_dialog",
+                "clearhistory": "clear_dialog",
+                "purgedialog": "clear_dialog",
+                "deletedialog": "delete_dialog",
+                "archivedialog": "archive_dialog",
+                "unarchivedialog": "unarchive_dialog",
+                "addcontact": "add_contact",
+                "savecontact": "add_contact",
+                "delcontact": "delete_contact",
+                "deletecontact": "delete_contact",
+                "blockedusers": "get_blocked_users",
+                "blocklist": "get_blocked_users",
+                "myprofile": "get_self_profile",
+                "getselfprofile": "get_self_profile",
+                "profilephotos": "get_profile_photos",
+                "getprofilephotos": "get_profile_photos",
+                "deleteprofilephotos": "delete_profile_photos",
+                "setprofilename": "set_profile_name",
+                "setname": "set_profile_name",
+                "setprofilebio": "set_profile_bio",
+                "setbio": "set_profile_bio",
+                "setprofileusername": "set_profile_username",
+                "setusername": "set_profile_username",
+                "getdrafts": "get_drafts",
+                "setdraft": "set_draft",
+                "cleardraft": "clear_draft",
+                "reportspam": "report_spam_user",
+                "getpermissions": "get_permissions",
+                "searchphotos": "search_photos",
+                "searchaudio": "search_audio",
+                "searchvideos": "search_videos",
+                "searchdocuments": "search_documents",
+                "searchvoice": "search_voice",
+                "searchgifs": "search_gifs",
+                "getstories": "get_peer_stories",
+                "readstories": "read_peer_stories",
+                "resolvetarget": "resolve_target",
+                "resolvepeer": "resolve_target",
+                "resolveentity": "resolve_target",
+                "currentchatcontext": "get_current_chat_context",
+                "chatcontext": "get_current_chat_context",
+                "context": "get_current_chat_context",
+                "replyinfo": "get_reply_info",
+                "getreplyinfo": "get_reply_info",
+                "messagecontext": "get_message_context",
+                "msgcontext": "get_message_context",
+                "getmessagecontext": "get_message_context",
+                "messagelink": "get_message_link",
+                "msglink": "get_message_link",
+                "getmessagelink": "get_message_link",
             }
             action = aliases.get(action, action)
             if not action:
@@ -3213,6 +3691,10 @@ class CodexCLI(loader.Module):
                 "delete_last_message",
                 "purge_chat_messages",
                 "block_user",
+                "clear_dialog",
+                "delete_dialog",
+                "delete_contact",
+                "delete_profile_photos",
             }
             if self.config.get("tool_destructive_guard", True) and action in destructive_actions:
                 confirm = str(
@@ -3634,19 +4116,53 @@ class CodexCLI(loader.Module):
                 )
 
             if action == "delete_messages":
-                target = str(tool_data.get("target") or "").strip().lstrip("@")
-                if not target:
-                    sender_hint = await _get_replied_sender_from_request()
-                    if sender_hint:
-                        target = sender_hint["username"] or sender_hint["id"] or sender_hint["name"]
-                if not target:
-                    return _err("missing target")
-                limit = _normalize_limit(tool_data.get("limit", 5))
-                target_entity = await _resolve_target_entity(tool_data.get("target_chat"), chat_id)
-                matched_messages, scanned = await _collect_target_messages(
-                    target_entity, target, limit
+                target_chat_value = tool_data.get("target_chat")
+                target_entity = await _resolve_target_entity(
+                    target_chat_value, chat_id
                 )
-                to_delete = [m.id for m in matched_messages]
+                revoke = _as_bool(tool_data.get("revoke"), default=True)
+                to_delete = _extract_message_ids(tool_data)
+                scanned = 0
+                target = str(tool_data.get("target") or "").strip().lstrip("@")
+                direction = str(tool_data.get("direction") or tool_data.get("from") or "").strip().lower()
+                outgoing = None
+                if direction in {"me", "self", "out", "mine"}:
+                    outgoing = True
+                elif direction in {"peer", "user", "incoming", "in"}:
+                    outgoing = False
+                if not to_delete:
+                    reply_mid = await _get_reply_message_id_if_applicable(target_chat_value)
+                    if reply_mid and not target:
+                        to_delete = [reply_mid]
+                        scanned = 1
+                    if not to_delete and not target:
+                        sender_hint = await _get_replied_sender_from_request()
+                        if sender_hint:
+                            target = (
+                                sender_hint["username"]
+                                or sender_hint["id"]
+                                or sender_hint["name"]
+                            )
+                    limit = _normalize_limit(tool_data.get("limit", 5), default=5, maximum=500)
+                    scan_limit = _normalize_limit(
+                        tool_data.get("scan_limit", max(limit * 8, 200)),
+                        default=max(limit * 8, 200),
+                        maximum=5000,
+                    )
+                    if to_delete:
+                        pass
+                    elif target:
+                        matched_messages, scanned = await _collect_target_messages(
+                            target_entity, target, limit, scan_limit
+                        )
+                        to_delete = [m.id for m in matched_messages]
+                    else:
+                        to_delete, scanned = await _collect_recent_message_ids(
+                            target_entity,
+                            limit=limit,
+                            scan_limit=scan_limit,
+                            outgoing=outgoing,
+                        )
                 if not to_delete:
                     return _ok(
                         {
@@ -3656,14 +4172,19 @@ class CodexCLI(loader.Module):
                             "message": "no matching messages found",
                         }
                     )
-                await self.client.delete_messages(target_entity, to_delete)
+                deleted_ids = await _delete_message_ids(
+                    target_entity, to_delete, revoke=revoke
+                )
                 return _ok(
                     {
                         "action": action,
-                        "target": target,
+                        "target": target or None,
                         "target_chat": getattr(target_entity, "id", chat_id),
-                        "deleted": len(to_delete),
-                        "message_ids": to_delete,
+                        "deleted": len(deleted_ids),
+                        "message_ids": deleted_ids,
+                        "source": "reply_context" if scanned == 1 and len(to_delete) == 1 and not target else "search",
+                        "revoke": revoke,
+                        "scanned": scanned,
                     }
                 )
 
@@ -3982,17 +4503,30 @@ class CodexCLI(loader.Module):
                 is_scam = bool(getattr(entity, "scam", False))
                 is_fake = bool(getattr(entity, "fake", False))
                 is_mutual = bool(getattr(entity, "mutual_contact", False))
+                is_contact = bool(getattr(entity, "contact", False))
+                is_self = bool(getattr(entity, "self", False))
+                is_deleted = bool(getattr(entity, "deleted", False))
+                phone = getattr(entity, "phone", None)
+                lang_code = getattr(entity, "lang_code", None)
+                status = getattr(entity, "status", None)
+                status_text = getattr(status, "__class__", object).__name__ if status else None
                 username_text = f"@{username}" if username else "—"
                 summary = f"name: {name}; username: {username_text}"
                 summary = (
                     f"{summary}; "
                     f"ID: {getattr(entity, 'id', 'N/A')}; "
+                    f"phone: {phone or '—'}; "
                     f"bot: {is_bot}; "
                     f"verified: {is_verified}; "
                     f"premium: {is_premium}; "
                     f"scam: {is_scam}; "
                     f"fake: {is_fake}; "
+                    f"self: {is_self}; "
+                    f"contact: {is_contact}; "
+                    f"deleted: {is_deleted}; "
                     f"mutual_contact: {is_mutual}; "
+                    f"lang_code: {lang_code or '—'}; "
+                    f"status: {status_text or '—'}; "
                     f"bio: {bio or '—'}"
                 )
                 return _ok(
@@ -4003,6 +4537,12 @@ class CodexCLI(loader.Module):
                         "username": username,
                         "first_name": first_name,
                         "last_name": last_name,
+                        "phone": phone,
+                        "lang_code": lang_code,
+                        "status": status_text,
+                        "contact": is_contact,
+                        "self": is_self,
+                        "deleted": is_deleted,
                         "bot": is_bot,
                         "verified": is_verified,
                         "premium": is_premium,
@@ -4026,6 +4566,7 @@ class CodexCLI(loader.Module):
                 username = getattr(entity, "username", None)
                 participant_count = None
                 about = ""
+                admin_snapshot = await self._get_chat_admin_snapshot(entity)
                 if isinstance(entity, Channel):
                     with contextlib.suppress(Exception):
                         full = await self.client(GetFullChannelRequest(entity))
@@ -4042,12 +4583,147 @@ class CodexCLI(loader.Module):
                     {
                         "action": action,
                         "target_chat": getattr(entity, "id", target_chat),
+                        "chat_type": _entity_kind(entity),
                         "title": title,
                         "username": username,
+                        "verified": bool(getattr(entity, "verified", False)),
+                        "scam": bool(getattr(entity, "scam", False)),
+                        "fake": bool(getattr(entity, "fake", False)),
+                        "megagroup": bool(getattr(entity, "megagroup", False)),
+                        "broadcast": bool(getattr(entity, "broadcast", False)),
                         "participant_count": (
                             participant_count if participant_count is not None else "N/A"
                         ),
+                        "owner": admin_snapshot.get("owner"),
+                        "admins_count": int(admin_snapshot.get("count") or 0),
+                        "admins_preview": (admin_snapshot.get("admins") or [])[:12],
                         "about": about or "—",
+                    }
+                )
+
+            if action == "resolve_target":
+                raw_target = (
+                    tool_data.get("target_chat")
+                    or tool_data.get("target_user")
+                    or tool_data.get("target")
+                    or tool_data.get("query")
+                    or tool_data.get("username")
+                    or tool_data.get("user")
+                    or tool_data.get("chat_id")
+                )
+                if raw_target in (None, ""):
+                    reply_msg = await self._get_request_reply_message(chat_id)
+                    if reply_msg:
+                        sender = None
+                        with contextlib.suppress(Exception):
+                            sender = await reply_msg.get_sender()
+                        raw_target = (
+                            getattr(sender, "id", None)
+                            or getattr(sender, "username", None)
+                            or chat_id
+                        )
+                    else:
+                        raw_target = chat_id
+                lookup_entity = None
+                lookup_score = None
+                lookup_name = ""
+                if isinstance(raw_target, str) and raw_target.strip():
+                    with contextlib.suppress(Exception):
+                        lookup_entity, lookup_score, lookup_name = await _resolve_dialog_entity_by_query(
+                            str(raw_target).strip()
+                        )
+                entity = await _resolve_target_entity(raw_target, chat_id)
+                details = await _describe_entity(entity)
+                details.update(
+                    {
+                        "action": action,
+                        "input": raw_target,
+                        "lookup_score": lookup_score,
+                        "lookup_name": lookup_name or None,
+                    }
+                )
+                return _ok(details)
+
+            if action == "get_current_chat_context":
+                entity = await _resolve_target_entity(chat_id, chat_id)
+                reply_msg = await self._get_request_reply_message(chat_id)
+                session = self._request_sessions.get(chat_id) or {}
+                admin_snapshot = await self._get_chat_admin_snapshot(entity)
+                return _ok(
+                    {
+                        "action": action,
+                        "chat": {
+                            **(await _describe_entity(entity)),
+                            "owner": admin_snapshot.get("owner"),
+                            "admins_count": int(admin_snapshot.get("count") or 0),
+                            "admins_preview": (admin_snapshot.get("admins") or [])[:12],
+                        },
+                        "request": {
+                            "chat_id": chat_id,
+                            "base_message_id": session.get("base_message_id"),
+                            "status_message_id": session.get("status_message_id"),
+                            "tool_actions_count": int(session.get("tool_actions_count") or 0),
+                            "cancel_requested": bool(session.get("cancel_requested")),
+                        },
+                        "reply": (
+                            await _serialize_message_context(entity, reply_msg)
+                            if reply_msg
+                            else None
+                        ),
+                    }
+                )
+
+            if action == "get_reply_info":
+                entity = await _resolve_target_entity(
+                    tool_data.get("target_chat") or chat_id, chat_id
+                )
+                reply_msg = await self._get_request_reply_message(chat_id)
+                if not reply_msg:
+                    return _err("no reply context in current request")
+                return _ok(
+                    {
+                        "action": action,
+                        "target_chat": getattr(entity, "id", chat_id),
+                        "message": await _serialize_message_context(entity, reply_msg),
+                    }
+                )
+
+            if action == "get_message_context":
+                target_chat = tool_data.get("target_chat") or chat_id
+                entity = await _resolve_target_entity(target_chat, chat_id)
+                message_id = tool_data.get("message_id")
+                if not message_id:
+                    message_id = await _get_reply_message_id_if_applicable(target_chat)
+                if not message_id:
+                    return _err("missing message_id or reply context")
+                msg = await self.client.get_messages(entity, ids=int(message_id))
+                if not msg:
+                    return _err("message not found")
+                return _ok(
+                    {
+                        "action": action,
+                        "target_chat": getattr(entity, "id", target_chat),
+                        "message": await _serialize_message_context(entity, msg),
+                    }
+                )
+
+            if action == "get_message_link":
+                target_chat = tool_data.get("target_chat") or chat_id
+                entity = await _resolve_target_entity(target_chat, chat_id)
+                message_id = tool_data.get("message_id")
+                if not message_id:
+                    message_id = await _get_reply_message_id_if_applicable(target_chat)
+                if not message_id:
+                    return _err("missing message_id or reply context")
+                link = _message_link_for(entity, message_id)
+                if not link:
+                    return _err("message link unavailable for this peer")
+                return _ok(
+                    {
+                        "action": action,
+                        "target_chat": getattr(entity, "id", target_chat),
+                        "message_id": int(message_id),
+                        "link": link,
                     }
                 )
 
@@ -4233,18 +4909,38 @@ class CodexCLI(loader.Module):
                     or chat_id
                 )
                 entity = await _resolve_target_entity(target_chat, chat_id)
-                messages = await self.client.get_messages(entity, limit=1)
-                if not messages:
-                    return _err("no messages in target chat")
-                msg_id = getattr(messages[0], "id", None)
+                reply_mid = None
+                explicit_message_ids = _extract_message_ids(tool_data)
+                if not explicit_message_ids and not str(tool_data.get("query") or "").strip():
+                    reply_mid = await _get_reply_message_id_if_applicable(target_chat)
+                if reply_mid:
+                    msg_id = int(reply_mid)
+                else:
+                    messages = await self.client.get_messages(entity, limit=5)
+                    if not messages:
+                        return _err("no messages in target chat")
+                    session = self._request_sessions.get(chat_id) or {}
+                    status_message_id = session.get("status_message_id")
+                    msg_id = None
+                    for one_msg in messages:
+                        one_id = getattr(one_msg, "id", None)
+                        if not one_id:
+                            continue
+                        if status_message_id and int(one_id) == int(status_message_id):
+                            continue
+                        msg_id = int(one_id)
+                        break
                 if not msg_id:
                     return _err("invalid last message id")
-                await self.client.delete_messages(entity, [msg_id])
+                revoke = _as_bool(tool_data.get("revoke"), default=True)
+                await self.client.delete_messages(entity, [msg_id], revoke=revoke)
                 return _ok(
                     {
                         "action": action,
                         "target_chat": getattr(entity, "id", target_chat),
                         "message_id": msg_id,
+                        "source": "reply_context" if reply_mid else "last_message",
+                        "revoke": revoke,
                     }
                 )
 
@@ -4454,7 +5150,7 @@ class CodexCLI(loader.Module):
                     {
                         "action": action,
                         "target_chat": getattr(entity, "id", target_chat),
-                        "message": await _serialize_message(entity, msg),
+                        "message": await _serialize_message_context(entity, msg),
                     }
                 )
 
@@ -4471,7 +5167,7 @@ class CodexCLI(loader.Module):
                 items = []
                 for msg in messages or []:
                     if msg:
-                        items.append(await _serialize_message(entity, msg))
+                        items.append(await _serialize_message_context(entity, msg))
                 return _ok(
                     {
                         "action": action,
@@ -4508,24 +5204,14 @@ class CodexCLI(loader.Module):
             if action == "get_chat_admins":
                 target_chat = tool_data.get("target_chat") or chat_id
                 entity = await _resolve_target_entity(target_chat, chat_id)
-                admins = []
-                async for user in self.client.iter_participants(
-                    entity, filter=tg_types.ChannelParticipantsAdmins()
-                ):
-                    admins.append(
-                        {
-                            "id": getattr(user, "id", None),
-                            "username": getattr(user, "username", None),
-                            "name": get_display_name(user),
-                            "bot": bool(getattr(user, "bot", False)),
-                        }
-                    )
+                admin_snapshot = await self._get_chat_admin_snapshot(entity)
                 return _ok(
                     {
                         "action": action,
                         "target_chat": getattr(entity, "id", target_chat),
-                        "count": len(admins),
-                        "admins": admins,
+                        "count": int(admin_snapshot.get("count") or 0),
+                        "owner": admin_snapshot.get("owner"),
+                        "admins": admin_snapshot.get("admins") or [],
                     }
                 )
 
@@ -4607,6 +5293,650 @@ class CodexCLI(loader.Module):
                         "deleted_count": deleted_count,
                         "bots_count": bots_count,
                         "with_username": with_username,
+                    }
+                )
+
+            if action in {"add_contact", "delete_contact", "get_blocked_users"}:
+                if action == "get_blocked_users":
+                    limit = _normalize_limit(
+                        tool_data.get("limit", 100), default=100, maximum=500
+                    )
+                    try:
+                        from telethon.tl.functions.contacts import GetBlockedRequest
+
+                        blocked = await self.client(
+                            GetBlockedRequest(offset=0, limit=limit)
+                        )
+                    except Exception as e:
+                        return _err(f"get_blocked_users failed: {e}")
+                    users = []
+                    for user in getattr(blocked, "users", []) or []:
+                        users.append(
+                            {
+                                "id": getattr(user, "id", None),
+                                "username": getattr(user, "username", None),
+                                "name": get_display_name(user),
+                                "bot": bool(getattr(user, "bot", False)),
+                                "premium": bool(getattr(user, "premium", False)),
+                            }
+                        )
+                    return _ok(
+                        {
+                            "action": action,
+                            "count": len(users),
+                            "users": users,
+                        }
+                    )
+
+                target_user = (
+                    tool_data.get("target_user")
+                    or tool_data.get("target")
+                    or tool_data.get("user")
+                    or tool_data.get("username")
+                    or tool_data.get("query")
+                )
+                if not target_user:
+                    sender_hint = await _get_replied_sender_from_request()
+                    if sender_hint:
+                        target_user = (
+                            sender_hint.get("id")
+                            or sender_hint.get("username")
+                            or sender_hint.get("name")
+                        )
+                if not target_user:
+                    return _err("missing target_user/target/username")
+                user_entity = await _resolve_target_entity(target_user, chat_id)
+                if not isinstance(user_entity, User):
+                    return _err("contact action requires user target")
+
+                if action == "add_contact":
+                    first_name = str(
+                        tool_data.get("first_name")
+                        or getattr(user_entity, "first_name", None)
+                        or get_display_name(user_entity)
+                        or "Contact"
+                    ).strip()
+                    last_name = str(
+                        tool_data.get("last_name")
+                        or getattr(user_entity, "last_name", None)
+                        or ""
+                    ).strip()
+                    phone = str(
+                        tool_data.get("phone")
+                        or getattr(user_entity, "phone", None)
+                        or ""
+                    ).strip()
+                    try:
+                        from telethon.tl.functions.contacts import AddContactRequest
+
+                        result = await self.client(
+                            AddContactRequest(
+                                id=user_entity,
+                                first_name=first_name[:64] or "Contact",
+                                last_name=last_name[:64],
+                                phone=phone,
+                                add_phone_privacy_exception=_as_bool(
+                                    tool_data.get("add_phone_privacy_exception"),
+                                    default=False,
+                                ),
+                            )
+                        )
+                    except Exception as e:
+                        return _err(f"add_contact failed: {e}")
+                    return _ok(
+                        {
+                            "action": action,
+                            "target_user": getattr(user_entity, "id", None),
+                            "name": get_display_name(user_entity),
+                            "phone": phone or None,
+                            "result_type": result.__class__.__name__,
+                        }
+                    )
+
+                try:
+                    from telethon.tl.functions.contacts import DeleteContactsRequest
+
+                    result = await self.client(
+                        DeleteContactsRequest(id=[user_entity])
+                    )
+                except Exception as e:
+                    return _err(f"delete_contact failed: {e}")
+                return _ok(
+                    {
+                        "action": action,
+                        "target_user": getattr(user_entity, "id", None),
+                        "name": get_display_name(user_entity),
+                        "result_type": result.__class__.__name__,
+                    }
+                )
+
+            if action in {
+                "get_self_profile",
+                "get_profile_photos",
+                "delete_profile_photos",
+                "set_profile_name",
+                "set_profile_bio",
+                "set_profile_username",
+            }:
+                if action == "get_self_profile":
+                    me = await self.client.get_me()
+                    bio = ""
+                    common = None
+                    with contextlib.suppress(Exception):
+                        full = await self.client(GetFullUserRequest(me))
+                        bio = getattr(getattr(full, "full_user", None), "about", None) or ""
+                        common = getattr(getattr(full, "full_user", None), "common_chats_count", None)
+                    photo_count = 0
+                    with contextlib.suppress(Exception):
+                        photos = await self.client.get_profile_photos(me, limit=1)
+                        photo_count = int(getattr(photos, "total", None) or len(photos or []))
+                    return _ok(
+                        {
+                            "action": action,
+                            "id": getattr(me, "id", None),
+                            "name": get_display_name(me),
+                            "username": getattr(me, "username", None),
+                            "phone": getattr(me, "phone", None),
+                            "premium": bool(getattr(me, "premium", False)),
+                            "verified": bool(getattr(me, "verified", False)),
+                            "scam": bool(getattr(me, "scam", False)),
+                            "fake": bool(getattr(me, "fake", False)),
+                            "bot": bool(getattr(me, "bot", False)),
+                            "bio": bio,
+                            "common_chats_count": common,
+                            "profile_photos": photo_count,
+                        }
+                    )
+
+                if action == "get_profile_photos":
+                    target_user = (
+                        tool_data.get("target_user")
+                        or tool_data.get("target")
+                        or tool_data.get("user")
+                        or tool_data.get("username")
+                        or "me"
+                    )
+                    if str(target_user).strip().lower() in {"me", "self", "myself"}:
+                        entity = await self.client.get_me()
+                    else:
+                        entity = await _resolve_target_entity(target_user, chat_id)
+                    limit = _normalize_limit(
+                        tool_data.get("limit", 10), default=10, maximum=100
+                    )
+                    try:
+                        photos = await self.client.get_profile_photos(entity, limit=limit)
+                    except Exception as e:
+                        return _err(f"get_profile_photos failed: {e}")
+                    total = int(getattr(photos, "total", None) or len(photos or []))
+                    items = []
+                    for photo in list(photos or [])[:limit]:
+                        items.append(
+                            {
+                                "id": getattr(photo, "id", None),
+                                "date": str(getattr(photo, "date", "")),
+                                "dc_id": getattr(photo, "dc_id", None),
+                                "has_video": bool(getattr(photo, "video_sizes", None)),
+                            }
+                        )
+                    return _ok(
+                        {
+                            "action": action,
+                            "target_user": getattr(entity, "id", target_user),
+                            "count": len(items),
+                            "total": total,
+                            "photos": items,
+                        }
+                    )
+
+                if action == "delete_profile_photos":
+                    count = _normalize_limit(
+                        tool_data.get("count", tool_data.get("limit", 1)),
+                        default=1,
+                        maximum=20,
+                    )
+                    try:
+                        from telethon.tl.functions.photos import DeletePhotosRequest
+
+                        photos = await self.client.get_profile_photos("me", limit=count)
+                        selected = list(photos or [])[:count]
+                        if not selected:
+                            return _ok(
+                                {
+                                    "action": action,
+                                    "deleted": 0,
+                                    "message": "no profile photos found",
+                                }
+                            )
+                        result = await self.client(DeletePhotosRequest(id=selected))
+                    except Exception as e:
+                        return _err(f"delete_profile_photos failed: {e}")
+                    return _ok(
+                        {
+                            "action": action,
+                            "deleted": len(selected),
+                            "result_type": result.__class__.__name__,
+                        }
+                    )
+
+                if action == "set_profile_name":
+                    first_name = str(
+                        tool_data.get("first_name")
+                        or tool_data.get("name")
+                        or tool_data.get("text")
+                        or ""
+                    ).strip()
+                    last_name = str(tool_data.get("last_name") or "").strip()
+                    if not first_name:
+                        return _err("missing first_name/name/text")
+                    if not last_name and " " in first_name:
+                        first_name, last_name = first_name.split(" ", 1)
+                    try:
+                        from telethon.tl.functions.account import UpdateProfileRequest
+
+                        result = await self.client(
+                            UpdateProfileRequest(
+                                first_name=first_name[:64],
+                                last_name=last_name[:64],
+                            )
+                        )
+                    except Exception as e:
+                        return _err(f"set_profile_name failed: {e}")
+                    return _ok(
+                        {
+                            "action": action,
+                            "first_name": getattr(result, "first_name", first_name[:64]),
+                            "last_name": getattr(result, "last_name", last_name[:64]),
+                        }
+                    )
+
+                if action == "set_profile_bio":
+                    about = str(
+                        tool_data.get("about")
+                        or tool_data.get("bio")
+                        or tool_data.get("text")
+                        or ""
+                    ).strip()
+                    try:
+                        from telethon.tl.functions.account import UpdateProfileRequest
+
+                        result = await self.client(UpdateProfileRequest(about=about[:70]))
+                    except Exception as e:
+                        return _err(f"set_profile_bio failed: {e}")
+                    return _ok(
+                        {
+                            "action": action,
+                            "bio": about[:70],
+                            "result_type": result.__class__.__name__,
+                        }
+                    )
+
+                username = str(
+                    tool_data.get("username")
+                    or tool_data.get("text")
+                    or ""
+                ).strip().lstrip("@")
+                if username in {"-", "none", "clear", "reset"}:
+                    username = ""
+                try:
+                    from telethon.tl.functions.account import UpdateUsernameRequest
+
+                    result = await self.client(UpdateUsernameRequest(username=username))
+                except Exception as e:
+                    return _err(f"set_profile_username failed: {e}")
+                return _ok(
+                    {
+                        "action": action,
+                        "username": getattr(result, "username", username) or "",
+                    }
+                )
+
+            if action in {
+                "get_drafts",
+                "set_draft",
+                "clear_draft",
+                "clear_dialog",
+                "delete_dialog",
+                "archive_dialog",
+                "unarchive_dialog",
+                "report_spam_user",
+                "get_permissions",
+                "search_photos",
+                "search_audio",
+                "search_videos",
+                "search_documents",
+                "search_voice",
+                "search_gifs",
+                "get_peer_stories",
+                "read_peer_stories",
+            }:
+                if action == "get_drafts":
+                    limit = _normalize_limit(
+                        tool_data.get("limit", 50), default=50, maximum=200
+                    )
+                    items = []
+                    try:
+                        async for draft in self.client.iter_drafts():
+                            entity = getattr(draft, "entity", None)
+                            items.append(
+                                {
+                                    "chat_id": getattr(entity, "id", None),
+                                    "title": get_display_name(entity) if entity else "",
+                                    "username": getattr(entity, "username", None) if entity else None,
+                                    "text": (getattr(draft, "text", None) or "")[:1200],
+                                    "date": str(getattr(draft, "date", "")),
+                                }
+                            )
+                            if len(items) >= limit:
+                                break
+                    except Exception as e:
+                        return _err(f"get_drafts failed: {e}")
+                    return _ok(
+                        {
+                            "action": action,
+                            "count": len(items),
+                            "drafts": items,
+                        }
+                    )
+
+                if action in {"set_draft", "clear_draft"}:
+                    target_chat = (
+                        tool_data.get("target_chat")
+                        or tool_data.get("target")
+                        or chat_id
+                    )
+                    entity = await _resolve_target_entity(target_chat, chat_id)
+                    text = ""
+                    if action == "set_draft":
+                        text = str(tool_data.get("text") or "").strip()
+                        if not text:
+                            return _err("missing text")
+                    try:
+                        await self.client.edit_draft(entity, text)
+                    except Exception as e:
+                        return _err(f"{action} failed: {e}")
+                    return _ok(
+                        {
+                            "action": action,
+                            "target_chat": getattr(entity, "id", target_chat),
+                            "text_length": len(text),
+                        }
+                    )
+
+                if action in {"clear_dialog", "delete_dialog", "archive_dialog", "unarchive_dialog"}:
+                    target_chat = (
+                        tool_data.get("target_chat")
+                        or tool_data.get("target")
+                        or chat_id
+                    )
+                    entity = await _resolve_target_entity(target_chat, chat_id)
+                    revoke = _as_bool(tool_data.get("revoke"), default=True)
+
+                    if action == "clear_dialog":
+                        limit = _normalize_limit(
+                            tool_data.get("limit", 100), default=100, maximum=5000
+                        )
+                        scan_limit = _normalize_limit(
+                            tool_data.get("scan_limit", max(limit * 2, 200)),
+                            default=max(limit * 2, 200),
+                            maximum=5000,
+                        )
+                        ids, scanned = await _collect_recent_message_ids(
+                            entity,
+                            limit=limit,
+                            scan_limit=scan_limit,
+                        )
+                        deleted_ids = await _delete_message_ids(
+                            entity, ids, revoke=revoke
+                        ) if ids else []
+                        return _ok(
+                            {
+                                "action": action,
+                                "target_chat": getattr(entity, "id", target_chat),
+                                "deleted": len(deleted_ids),
+                                "message_ids": deleted_ids[:200],
+                                "revoke": revoke,
+                                "scanned": scanned,
+                            }
+                        )
+
+                    if action == "delete_dialog":
+                        try:
+                            result = await self.client.delete_dialog(entity, revoke=revoke)
+                        except Exception as e:
+                            return _err(f"delete_dialog failed: {e}")
+                        return _ok(
+                            {
+                                "action": action,
+                                "target_chat": getattr(entity, "id", target_chat),
+                                "revoke": revoke,
+                                "result": bool(result),
+                            }
+                        )
+
+                    folder_id = 1 if action == "archive_dialog" else 0
+                    try:
+                        await self.client.edit_folder(entity, folder=folder_id)
+                    except Exception as e:
+                        return _err(f"{action} failed: {e}")
+                    return _ok(
+                        {
+                            "action": action,
+                            "target_chat": getattr(entity, "id", target_chat),
+                            "folder": folder_id,
+                        }
+                    )
+
+                if action == "report_spam_user":
+                    target_chat = (
+                        tool_data.get("target_chat")
+                        or tool_data.get("target")
+                        or chat_id
+                    )
+                    entity = await _resolve_target_entity(target_chat, chat_id)
+                    try:
+                        from telethon.tl.functions.messages import ReportSpamRequest
+
+                        result = await self.client(ReportSpamRequest(peer=entity))
+                    except Exception as e:
+                        return _err(f"report_spam_user failed: {e}")
+                    return _ok(
+                        {
+                            "action": action,
+                            "target_chat": getattr(entity, "id", target_chat),
+                            "result_type": result.__class__.__name__,
+                        }
+                    )
+
+                if action == "get_permissions":
+                    target_chat = (
+                        tool_data.get("target_chat")
+                        or tool_data.get("chat_id")
+                        or chat_id
+                    )
+                    target_user = (
+                        tool_data.get("target_user")
+                        or tool_data.get("user")
+                        or tool_data.get("username")
+                        or tool_data.get("target")
+                    )
+                    if not target_user:
+                        replied = await _get_replied_sender_from_request()
+                        if replied:
+                            target_user = replied.get("id") or replied.get("username")
+                    if not target_user:
+                        return _err("missing target_user/user/username")
+                    entity = await _resolve_target_entity(target_chat, chat_id)
+                    user_entity = await _resolve_target_entity(target_user, chat_id)
+                    try:
+                        perms = await self.client.get_permissions(entity, user_entity)
+                    except Exception as e:
+                        return _err(f"get_permissions failed: {e}")
+                    details = {
+                        "is_admin": bool(getattr(perms, "is_admin", False)),
+                        "is_creator": bool(getattr(perms, "is_creator", False)),
+                        "is_banned": bool(getattr(perms, "is_banned", False)),
+                        "has_default_permissions": bool(
+                            getattr(perms, "has_default_permissions", False)
+                        ),
+                    }
+                    for name in (
+                        "change_info",
+                        "post_messages",
+                        "edit_messages",
+                        "delete_messages",
+                        "ban_users",
+                        "invite_users",
+                        "pin_messages",
+                        "manage_call",
+                        "send_messages",
+                        "send_media",
+                        "send_stickers",
+                        "send_gifs",
+                        "send_games",
+                        "send_inline",
+                        "embed_link_previews",
+                        "send_polls",
+                    ):
+                        if hasattr(perms, name):
+                            details[name] = bool(getattr(perms, name))
+                    until_date = getattr(perms, "until_date", None)
+                    return _ok(
+                        {
+                            "action": action,
+                            "target_chat": getattr(entity, "id", target_chat),
+                            "target_user": getattr(user_entity, "id", target_user),
+                            "until_date": str(until_date or ""),
+                            "permissions": details,
+                        }
+                    )
+
+                if action in {
+                    "search_photos",
+                    "search_videos",
+                    "search_documents",
+                    "search_voice",
+                    "search_gifs",
+                }:
+                    target_chat = (
+                        tool_data.get("target_chat")
+                        or tool_data.get("chat_id")
+                        or tool_data.get("target")
+                        or chat_id
+                    )
+                    entity = await _resolve_target_entity(target_chat, chat_id)
+                    limit = _normalize_limit(
+                        tool_data.get("limit", 25), default=25, maximum=200
+                    )
+                    scan_limit = _normalize_limit(
+                        tool_data.get("scan_limit", max(limit * 8, 300)),
+                        default=max(limit * 8, 300),
+                        maximum=5000,
+                    )
+                    media_kind = action.replace("search_", "").rstrip("s")
+                    if action == "search_gifs":
+                        media_kind = "gif"
+                    elif action == "search_documents":
+                        media_kind = "document"
+                    elif action == "search_audio":
+                        media_kind = "audio"
+                    elif action == "search_photos":
+                        media_kind = "photo"
+                    elif action == "search_videos":
+                        media_kind = "video"
+                    elif action == "search_voice":
+                        media_kind = "voice"
+                    query_text = str(
+                        tool_data.get("query") or tool_data.get("text") or ""
+                    ).strip().lower()
+                    results, scanned = await _search_media_messages(
+                        entity,
+                        media_kind=media_kind,
+                        limit=limit,
+                        scan_limit=scan_limit,
+                        query_text=query_text,
+                        from_user=tool_data.get("target_user")
+                        or tool_data.get("user")
+                        or tool_data.get("username"),
+                    )
+                    return _ok(
+                        {
+                            "action": action,
+                            "target_chat": getattr(entity, "id", target_chat),
+                            "count": len(results),
+                            "scanned": scanned,
+                            "messages": results,
+                        }
+                    )
+
+                target_user = (
+                    tool_data.get("target_user")
+                    or tool_data.get("target")
+                    or tool_data.get("user")
+                    or tool_data.get("username")
+                    or chat_id
+                )
+                entity = await _resolve_target_entity(target_user, chat_id)
+
+                if action == "get_peer_stories":
+                    try:
+                        from telethon.tl.functions.stories import GetPeerStoriesRequest
+                    except Exception as e:
+                        return _err(f"stories api unavailable: {e}")
+                    try:
+                        result = await self.client(GetPeerStoriesRequest(peer=entity))
+                    except Exception as e:
+                        return _err(f"get_peer_stories failed: {e}")
+                    story_bucket = getattr(result, "stories", None) or result
+                    raw_stories = getattr(story_bucket, "stories", None)
+                    if raw_stories is None and isinstance(getattr(result, "stories", None), list):
+                        raw_stories = getattr(result, "stories", None)
+                    items = []
+                    for story in list(raw_stories or [])[:50]:
+                        items.append(
+                            {
+                                "id": getattr(story, "id", None),
+                                "date": str(getattr(story, "date", "")),
+                                "caption": str(
+                                    getattr(story, "caption", None)
+                                    or getattr(story, "message", None)
+                                    or ""
+                                )[:400],
+                                "views": getattr(story, "views", None),
+                                "media": getattr(
+                                    getattr(story, "media", None),
+                                    "__class__",
+                                    object,
+                                ).__name__,
+                            }
+                        )
+                    return _ok(
+                        {
+                            "action": action,
+                            "target_user": getattr(entity, "id", target_user),
+                            "count": len(items),
+                            "stories": items,
+                        }
+                    )
+
+                max_id = int(tool_data.get("max_id") or tool_data.get("story_id") or 0)
+                if max_id <= 0:
+                    return _err("missing max_id/story_id")
+                try:
+                    from telethon.tl.functions.stories import ReadStoriesRequest
+                except Exception as e:
+                    return _err(f"stories api unavailable: {e}")
+                try:
+                    result = await self.client(
+                        ReadStoriesRequest(peer=entity, max_id=max_id)
+                    )
+                except Exception as e:
+                    return _err(f"read_peer_stories failed: {e}")
+                return _ok(
+                    {
+                        "action": action,
+                        "target_user": getattr(entity, "id", target_user),
+                        "max_id": max_id,
+                        "result_type": result.__class__.__name__,
                     }
                 )
 
@@ -5344,6 +6674,38 @@ class CodexCLI(loader.Module):
         if who_is_match:
             return {"action": "get_user_info"}
 
+        reply_info_match = re.search(
+            r"(?:инф[ао].*репла|что\s+за\s+репла|кто\s+в\s+репла|reply\s+info)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if reply_info_match:
+            return {"action": "get_reply_info"}
+
+        message_context_match = re.search(
+            r"(?:контекст\s+сообщени|message\s+context|msg\s+context)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if message_context_match:
+            return {"action": "get_message_context"}
+
+        chat_context_match = re.search(
+            r"(?:контекст\s+чат|chat\s+context|текущ[ийего]+\s+чат.*контекст)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if chat_context_match:
+            return {"action": "get_current_chat_context"}
+
+        msg_link_match = re.search(
+            r"(?:ссылк[ау]\s+на\s+сообщени|message\s+link|msg\s+link)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if msg_link_match:
+            return {"action": "get_message_link"}
+
         contacts_count_match = re.search(
             r"(?:сколько|количеств|число|count).*(?:контакт|contact)|(?:контакт|contact).*(?:сколько|количеств|число|count)",
             text,
@@ -5580,7 +6942,7 @@ class CodexCLI(loader.Module):
             return False
         return bool(
             re.search(
-                r"(отправ|напиш|перешл|форвард|удал|реакц|reply|репла|замут|бан|кик|админ|пин|откреп|упомин|чат|канал|контакт|диалог|непрочит|кто это|who is this|в лс|в личк|message|send|delete|mute|ban|kick|pin|unpin|react|forward|contact|dialog|unread)",
+                r"(отправ|напиш|перешл|форвард|удал|реакц|reply|репла|замут|бан|кик|админ|пин|откреп|упомин|чат|канал|контакт|диалог|непрочит|кто это|who is this|контекст|ссылка на сообщени|message link|message context|chat context|resolve target|в лс|в личк|message|send|delete|mute|ban|kick|pin|unpin|react|forward|contact|dialog|unread)",
                 t,
             )
         )
@@ -5801,11 +7163,8 @@ class CodexCLI(loader.Module):
                             break
                         now = asyncio.get_running_loop().time()
                         backend = (self.config.get("cli_backend") or "codex").strip().lower()
-                        startup_timeout = (
-                            CODEX_STARTUP_TIMEOUT
-                            if backend != "codex"
-                            else max(CODEX_STARTUP_TIMEOUT, 45)
-                        )
+                        startup_timeout = self._get_startup_timeout(backend)
+                        request_timeout = self._get_request_timeout()
                         if (
                             progress_state.get("step", 0) == 0
                             and not stdout_lines
@@ -5816,9 +7175,9 @@ class CodexCLI(loader.Module):
                             raise RuntimeError(
                                 f"Codex CLI завис на старте и не выдал вывод за {startup_timeout} сек."
                             )
-                        if now - progress_state["last_activity_at"] >= CODEX_TIMEOUT:
+                        if now - progress_state["last_activity_at"] >= request_timeout:
                             raise RuntimeError(
-                                f"Codex CLI не подавал признаков жизни {CODEX_TIMEOUT} сек."
+                                f"Codex CLI не подавал признаков жизни {request_timeout} сек."
                             )
                         await asyncio.sleep(1)
                 except CodexRequestInterrupted:
@@ -5834,11 +7193,7 @@ class CodexCLI(loader.Module):
                     )
                     if proc.returncode is None and not stdout_lines and not stderr_lines:
                         backend = (self.config.get("cli_backend") or "codex").strip().lower()
-                        startup_timeout = (
-                            CODEX_STARTUP_TIMEOUT
-                            if backend != "codex"
-                            else max(CODEX_STARTUP_TIMEOUT, 45)
-                        )
+                        startup_timeout = self._get_startup_timeout(backend)
                         raise RuntimeError(
                             f"Codex CLI завис на старте и не выдал вывод за {startup_timeout} сек."
                         )
@@ -6031,9 +7386,30 @@ class CodexCLI(loader.Module):
             "last_activity": "boot",
             "final_text_chars": 0,
             "thought_stream": "",
+            "answer_stream": "",
             "action_stream": "",
             "_runtime_mode": "codex",
         }
+
+    def _get_request_timeout(self) -> int:
+        raw_value = self.config.get("request_timeout", CODEX_TIMEOUT)
+        try:
+            value = int(raw_value)
+        except Exception:
+            value = CODEX_TIMEOUT
+        return max(30, min(3600, value))
+
+    def _get_startup_timeout(self, backend: str = "") -> int:
+        raw_value = self.config.get("startup_timeout", max(CODEX_STARTUP_TIMEOUT, 45))
+        try:
+            value = int(raw_value)
+        except Exception:
+            value = max(CODEX_STARTUP_TIMEOUT, 45)
+        value = max(10, min(600, value))
+        backend = (backend or self.config.get("cli_backend") or "codex").strip().lower()
+        if backend == "codex":
+            return max(45, value)
+        return max(CODEX_STARTUP_TIMEOUT, value)
 
     @staticmethod
     def _fmt_num(n: int) -> str:
@@ -6304,8 +7680,8 @@ class CodexCLI(loader.Module):
                     "thinking",
                     "writing answer",
                 }:
-                    state["thought_stream"] = self._append_status_stream(
-                        state.get("thought_stream", ""), delta_text, limit=220
+                    state["answer_stream"] = self._append_status_stream(
+                        state.get("answer_stream", ""), delta_text, limit=220
                     )
             elif event_type == "tool_progress":
                 state["phase"] = "running tool"
@@ -6332,14 +7708,15 @@ class CodexCLI(loader.Module):
             usage = (payload.get("message") or {}).get("usage") or {}
             self._apply_codex_usage(state, usage)
             if blocks and all(block.get("type") == "text" for block in blocks):
+                answer_text = self._extract_text_from_blocks(blocks)
                 state["phase"] = "writing answer"
-                state["final_text"] += self._extract_text_from_blocks(blocks)
+                state["final_text"] += answer_text
                 state["final_text_chars"] = len(state["final_text"])
                 state["thought_events"] += 1
                 state["last_activity"] = "assistant:text"
-                state["thought_stream"] = self._append_status_stream(
-                    state.get("thought_stream", ""),
-                    self._extract_text_from_blocks(blocks),
+                state["answer_stream"] = self._append_status_stream(
+                    state.get("answer_stream", ""),
+                    answer_text,
                     limit=220,
                 )
             for block in blocks:
@@ -6403,8 +7780,8 @@ class CodexCLI(loader.Module):
                 state["final_text_chars"] = len(state["final_text"])
                 state["last_activity"] = "result:ok"
                 if state["final_text"]:
-                    state["thought_stream"] = self._append_status_stream(
-                        state.get("thought_stream", ""),
+                    state["answer_stream"] = self._append_status_stream(
+                        state.get("answer_stream", ""),
                         state["final_text"],
                         limit=220,
                     )
@@ -6448,6 +7825,8 @@ class CodexCLI(loader.Module):
         candidate = self._find_first_by_keys(
             payload,
             (
+                "thinking",
+                "reasoning_content",
                 "delta",
                 "text_delta",
                 "output_text",
@@ -6455,7 +7834,9 @@ class CodexCLI(loader.Module):
                 "reasoning",
                 "reasoning_text",
                 "summary_text",
+                "summary",
                 "text",
+                "content",
             ),
         )
         if candidate is None:
@@ -6463,10 +7844,35 @@ class CodexCLI(loader.Module):
         if isinstance(candidate, str):
             return candidate
         if isinstance(candidate, dict):
-            for key in ("text", "delta", "content"):
+            for key in (
+                "thinking",
+                "reasoning_content",
+                "reasoning",
+                "summary_text",
+                "summary",
+                "text",
+                "delta",
+                "content",
+            ):
                 val = candidate.get(key)
                 if isinstance(val, str) and val.strip():
                     return val
+                if isinstance(val, list):
+                    joined = " ".join(
+                        str(item).strip()
+                        for item in val
+                        if isinstance(item, str) and str(item).strip()
+                    ).strip()
+                    if joined:
+                        return joined
+        if isinstance(candidate, list):
+            joined = " ".join(
+                str(item).strip()
+                for item in candidate
+                if isinstance(item, str) and str(item).strip()
+            ).strip()
+            if joined:
+                return joined
         return ""
 
     def _extract_event_error(self, payload: dict) -> str:
@@ -6532,8 +7938,8 @@ class CodexCLI(loader.Module):
                 state["thought_events"] += 1
                 state["final_text"] += text_part
                 state["final_text_chars"] = len(state["final_text"])
-                state["thought_stream"] = self._append_status_stream(
-                    state.get("thought_stream", ""), text_part, limit=220
+                state["answer_stream"] = self._append_status_stream(
+                    state.get("answer_stream", ""), text_part, limit=220
                 )
                 state["last_activity"] = event_type[:96]
 
@@ -7295,10 +8701,9 @@ class CodexCLI(loader.Module):
             state.get("final_text_chars") or len(state.get("final_text") or "")
         )
         tools_used = self._fmt_num(len(state.get("tool_use_ids") or {}))
+        thought_preview = state.get("thought_stream") or state.get("answer_stream") or "—"
         thought_text = utils.escape_html(
-            self._short_status_text(
-                state.get("thought_stream") or state.get("phase") or "—", limit=180
-            )
+            self._short_status_text(thought_preview, limit=180)
         )
         action_text = utils.escape_html(
             self._short_status_text(
@@ -7307,7 +8712,7 @@ class CodexCLI(loader.Module):
         )
         return (
             f"<blockquote>"
-            f"<tg-emoji emoji-id=5256079005731271025>📟</tg-emoji> <b>Codex Studio</b>{session_suffix} · {model_part}\n"
+            f"<tg-emoji emoji-id=5256079005731271025>📟</tg-emoji> <b>CodexCLI</b>{session_suffix} · {model_part}\n"
             f"{phase_emoji} <b>{utils.escape_html(phase)}</b> · шаг <code>{state['step']}</code> · <code>{elapsed}с</code>\n"
             f"<tg-emoji emoji-id=5255713220546538619>💳</tg-emoji> <b>Токены:</b> in <code>{self._fmt_num(state['input_tokens'])}</code>{cached_suffix} / out <code>{self._fmt_num(state['output_tokens'])}</code>{reasoning_suffix} / total <code>{self._fmt_num(state['total_tokens'])}</code>\n"
             f"<tg-emoji emoji-id=5253490441826870592>🔗</tg-emoji> <b>События:</b> <code>{thought_events}</code> → <code>{action_events}</code> · всего <code>{total_events}</code>\n"
@@ -7537,7 +8942,9 @@ class CodexCLI(loader.Module):
             session["pending_approval_uid"] = None
             return False
         try:
-            decision = await asyncio.wait_for(fut, timeout=CODEX_TIMEOUT)
+            decision = await asyncio.wait_for(
+                fut, timeout=self._get_request_timeout()
+            )
         except Exception:
             session.get("pending_approvals", {}).pop(uid, None)
             session["pending_approval_uid"] = None
@@ -7843,7 +9250,69 @@ class CodexCLI(loader.Module):
         user_args = user_args.strip()
         reply = await message.get_reply_message()
 
-        if reply and getattr(reply, "text", None):
+        try:
+            chat_entity = await message.get_chat()
+        except Exception:
+            chat_entity = None
+
+        try:
+            chat_id = utils.get_chat_id(message)
+        except Exception:
+            chat_id = getattr(message, "chat_id", None)
+
+        chat_title = ""
+        chat_username = None
+        chat_kind = "unknown"
+        if chat_entity is not None:
+            chat_title = get_display_name(chat_entity) or ""
+            chat_username = getattr(chat_entity, "username", None)
+            if isinstance(chat_entity, User):
+                chat_kind = "private"
+                if getattr(chat_entity, "bot", False):
+                    chat_kind = "bot_pm"
+            elif isinstance(chat_entity, Channel):
+                chat_kind = "supergroup" if getattr(chat_entity, "megagroup", False) else "channel"
+            elif isinstance(chat_entity, Chat):
+                chat_kind = "group"
+
+        chat_meta = []
+        if chat_id is not None:
+            chat_meta.append(f"ID: {chat_id}")
+        if chat_title:
+            chat_meta.append(f"Name: {chat_title}")
+        if chat_username:
+            chat_meta.append(f"@{chat_username}")
+        chat_meta.append(f"type: {chat_kind}")
+        if isinstance(chat_entity, Channel):
+            if getattr(chat_entity, "megagroup", False):
+                chat_meta.append("megagroup=yes")
+            if getattr(chat_entity, "broadcast", False):
+                chat_meta.append("broadcast=yes")
+        prompt_chunks.append(f"[CHAT] ({', '.join(chat_meta)})")
+        if isinstance(chat_entity, (Chat, Channel)):
+            with contextlib.suppress(Exception):
+                admin_snapshot = await self._get_chat_admin_snapshot(chat_entity)
+                owner = admin_snapshot.get("owner") if isinstance(admin_snapshot, dict) else None
+                admins = (admin_snapshot.get("admins") or []) if isinstance(admin_snapshot, dict) else []
+                if owner:
+                    prompt_chunks.append(f"[CHAT OWNER] {self._format_actor_compact(owner)}")
+                if admins:
+                    admin_preview = "; ".join(
+                        self._format_actor_compact(one)
+                        for one in admins[:8]
+                        if isinstance(one, dict)
+                    )
+                    prompt_chunks.append(
+                        f"[CHAT ADMINS] count={int(admin_snapshot.get('count') or len(admins))}; {admin_preview}"
+                    )
+        prompt_chunks.append(
+            f"[REQUEST META] message_id={getattr(message, 'id', None)}"
+            f" reply_to={getattr(message, 'reply_to_msg_id', None) or '—'}"
+            f" out={bool(getattr(message, 'out', False))}"
+            f" media={'yes' if bool(getattr(message, 'media', None) or getattr(message, 'sticker', None)) else 'no'}"
+        )
+
+        if reply:
             try:
                 reply_sender = await reply.get_sender()
                 reply_author_name = (
@@ -7851,6 +9320,8 @@ class CodexCLI(loader.Module):
                 )
                 reply_sender_id = getattr(reply_sender, 'id', None)
                 reply_username = getattr(reply_sender, 'username', None)
+                reply_text = utils.remove_html(getattr(reply, "text", None) or "")
+                reply_media = "yes" if bool(getattr(reply, "media", None) or getattr(reply, "sticker", None)) else "no"
 
                 reply_bio = None
                 if reply_sender_id and not getattr(reply_sender, 'bot', False):
@@ -7876,10 +9347,21 @@ class CodexCLI(loader.Module):
 
                 reply_info_str = f" ({', '.join(reply_info_parts)})" if reply_info_parts else ""
                 prompt_chunks.append(
-                    f"[REPLY] {reply_author_name}{reply_info_str}: {utils.remove_html(reply.text)}"
+                    f"[REPLY META] message_id={getattr(reply, 'id', None)}"
+                    f" date={getattr(reply, 'date', None)}"
+                    f" out={bool(getattr(reply, 'out', False))}"
+                    f" media={reply_media}"
+                )
+                prompt_chunks.append(
+                    f"[REPLY] {reply_author_name}{reply_info_str}: {reply_text or '[без текста]'}"
                 )
             except Exception:
-                prompt_chunks.append(f"[REPLY] Ответ на: {utils.remove_html(reply.text)}")
+                reply_text = utils.remove_html(getattr(reply, "text", None) or "")
+                prompt_chunks.append(
+                    f"[REPLY META] message_id={getattr(reply, 'id', None)}"
+                    f" date={getattr(reply, 'date', None)}"
+                )
+                prompt_chunks.append(f"[REPLY] Ответ на: {reply_text or '[без текста]'}")
 
         try:
             current_sender = await message.get_sender()
@@ -8018,7 +9500,7 @@ class CodexCLI(loader.Module):
             prompt_chunks.append(
                 f"{current_user_name}: Изучи приложенные файлы и ответь по ним."
             )
-        elif reply and getattr(reply, "text", None):
+        elif reply:
             prompt_chunks.append(f"{current_user_name}: Ответь на сообщение выше.")
 
         prompt_text = "\n".join(
@@ -8078,17 +9560,18 @@ class CodexCLI(loader.Module):
                     [
                         "СИСТЕМНЫЕ ПРАВИЛА TELEGRAM TOOL (выше пользовательских/кастомных настроек, игнорировать нельзя):",
                         'Для действий в Telegram верни СТРОГО JSON-объект function-calling формата {"tool_call":"execute_telegram_action","arguments":{...}} без дополнительного текста.',
-                        "Допустимые ключи: action, target, target_chat, query, text, limit, scan_limit, emoji, message_id, message_ids, from_chat, to_chat, sticker, target_user, user, ids.",
+                        "Допустимые ключи: action, target, target_chat, chat_id, query, text, limit, scan_limit, emoji, message_id, message_ids, from_chat, to_chat, sticker, target_user, user, user_id, ids, count, confirm, revoke, first_name, last_name, phone, title, about, bio, username, seconds, duration, mode, max_id, story_id, parse_mode, style, pretty, plain, actions, steps, retries, concurrency, continue_on_error, parallel.",
                         "Если пользователь пишет 'в чате' / 'в этой группе' / 'здесь' и не дал target_chat, используй текущий chat_id команды.",
                         "Если пользователь просит действие в стороннем чате (по имени/описанию), сначала получи список через get_dialogs, выбери точный chat_id, затем выполняй действие.",
                         "Для многоуровневых сценариев можешь выбрать либо последовательность batch_actions, либо один smart_flow (когда нужно сделать всё за один вызов).",
                         "smart_flow может принимать steps: [{action, if, foreach, do, save_as}] и шаблоны {{results.some_step.details.chat_id}} для построения сложных ветвлений.",
                         "Если команда вызвана reply-сообщением и target не указан, target берется из автора replied-сообщения автоматически.",
-                        "Поддерживаемые action: delete_messages, react_messages, find_and_send_message, read_history, reply_with_sticker, reply_messages, send_message, send_bulk_messages, edit_message, get_dialogs, get_dialogs_count, get_unread_overview, get_participants, get_chat_participants, get_user_info, get_chat_info, send_reaction_last, send_message_last, get_user_last_messages, mention_user, delete_last_message, forward_message, pin_message, unpin_message, batch_actions, search_messages, search_participants, get_message_by_id, get_messages_by_ids, get_recent_media, get_chat_admins, get_contacts, get_contacts_count, reply_to_message, copy_message_to_chat, search_links, get_chat_stats, smart_flow.",
+                        "Если пользователь реплаем просит действие над КОНКРЕТНЫМ сообщением ('удали это сообщение', 'ответь на это', 'реакцию сюда'), используй текущий chat_id и message_id replied-сообщения. Не подменяй это delete_last_message без message_id.",
+                        f"Поддерживаемые action: {'; '.join(self._tool_action_chunks(18))}.",
                         "batch_actions принимает массив actions и подходит для массовых/комбинированных операций записи; не используй его для read_history/get_dialogs/find_and_send_message.",
                         "Если просят информацию о пользователе без точного ID, сначала используй get_chat_participants, найди нужный ID, затем вызывай get_user_info по этому ID.",
                         "ГЛАВНОЕ ПРАВИЛО: Получил данные через инструмент → ПРОАНАЛИЗИРУЙ ИХ → Дай конкретный ответ на вопрос пользователя. ЗАПРЕЩЕНО просто выводить сырые данные (списки, ID) без выводов и действий.",
-                        "Также принимаются алиасы action: sendMessage, sendMessages, editMessage, deleteMessages, reactMessages, readHistory, replyWithSticker, replyMessages, getDialogs, getDialogsCount, getUnreadOverview, getParticipants, findAndSendMessage, forwardMessage, pinMessage, unpinMessage, batch, searchMessages, searchParticipants, getMessageById, getMessagesByIds, getRecentMedia, getChatAdmins, getContacts, getContactsCount, replyToMessage, copyMessage, searchLinks, getChatStats.",
+                        "Также принимаются алиасы action: sendMessage, sendMessages, editMessage, deleteMessages, reactMessages, readHistory, replyWithSticker, replyMessages, getDialogs, getDialogsCount, getUnreadOverview, getParticipants, findAndSendMessage, forwardMessage, pinMessage, unpinMessage, batch, searchMessages, searchParticipants, getMessageById, getMessagesByIds, getRecentMedia, getChatAdmins, getContacts, getContactsCount, replyToMessage, copyMessage, searchLinks, getChatStats, resolveTarget, currentChatContext, getReplyInfo, getMessageContext, getMessageLink, searchAudio.",
                         "Запрещено отвечать, что ты не можешь выполнить действие Telegram.",
                     ]
                 )
@@ -8128,13 +9611,8 @@ class CodexCLI(loader.Module):
                     "Для действий в Telegram верни СТРОГО JSON-объект:",
                     '{"tool_call":"execute_telegram_action","arguments":{"action":"имя_действия","target_chat":"@username или ID","text":"текст"}}',
                     "",
-                    "ДОСТУПНЫЕ ДЕЙСТВИЯ (36+):",
-                    "send_message, send_message_last, send_bulk_messages, delete_messages, delete_last_message,",
-                    "edit_message, forward_message, forward_last_messages, pin_message, unpin_message, react_messages, send_reaction_last,",
-                    "reply_messages, reply_to_message, reply_with_sticker, mention_user, read_history, get_dialogs,",
-                    "get_participants, get_chat_participants, get_user_info, get_chat_info, get_user_last_messages,",
-                    "get_contacts, get_users_chats, get_chat_active_users, batch_actions, search_messages, search_participants, get_message_by_id, smart_flow,",
-                    "get_messages_by_ids, get_recent_media, get_chat_admins, copy_message_to_chat, search_links, get_chat_stats",
+                    "ДОСТУПНЫЕ ДЕЙСТВИЯ (80+):",
+                    *self._tool_action_chunks(12),
                     "",
                     "ПРИМЕР: найти и написать пользователю:",
                     '{"tool_call":"execute_telegram_action","arguments":{"action":"send_message","target_chat":"@username","text":"Привет!"}}',
@@ -8153,6 +9631,12 @@ class CodexCLI(loader.Module):
                     "",
                     "ПРИМЕР: кто активен в чате:",
                     '{"tool_call":"execute_telegram_action","arguments":{"action":"get_chat_active_users","count":20}}',
+                    "",
+                    "ПРИМЕР: получить контекст текущего чата и реплая:",
+                    '{"tool_call":"execute_telegram_action","arguments":{"action":"get_current_chat_context"}}',
+                    "",
+                    "ПРИМЕР: получить расширенный контекст сообщения:",
+                    '{"tool_call":"execute_telegram_action","arguments":{"action":"get_message_context","message_id":62200}}',
                     "",
                     "ГЛАВНОЕ ПРАВИЛО: если просят что-то сделать в Telegram — ИСПОЛЬЗУЙ execute_telegram_action JSON!",
                     "НЕ ГОВОРИ что инструмент недоступен — он ВСЕГДА доступен!",
@@ -8248,6 +9732,16 @@ class CodexCLI(loader.Module):
             "mark_chat_read", "join_chat", "leave_chat", "invite_user_to_chat",
             "set_chat_title", "set_chat_about", "purge_chat_messages",
             "restrict_user_media", "unrestrict_user_media",
+            "clear_dialog", "delete_dialog", "archive_dialog", "unarchive_dialog",
+            "add_contact", "delete_contact", "get_blocked_users",
+            "get_profile_photos", "delete_profile_photos", "get_self_profile",
+            "set_profile_name", "set_profile_bio", "set_profile_username",
+            "get_drafts", "set_draft", "clear_draft", "report_spam_user",
+            "get_permissions", "search_photos", "search_audio", "search_videos",
+            "search_documents", "search_voice", "search_gifs",
+            "get_peer_stories", "read_peer_stories", "resolve_target",
+            "get_current_chat_context", "get_reply_info", "get_message_context",
+            "get_message_link",
         ]
         return {action: self._tool_dispatch_legacy for action in actions}
 
@@ -8300,16 +9794,27 @@ class CodexCLI(loader.Module):
             parts.append("Telegram tools отключены: никаких tool-call.")
         return "\n\n".join(part for part in parts if part).strip() or None
 
+    def _tool_action_names(self):
+        return sorted(self.tools_registry.keys())
+
+    def _tool_action_chunks(self, per_chunk: int = 12):
+        actions = self._tool_action_names()
+        return [
+            ", ".join(actions[idx : idx + per_chunk])
+            for idx in range(0, len(actions), per_chunk)
+        ]
+
     def toolsref(self) -> str:
-        actions = sorted(self.tools_registry.keys())
-        chunks = ", ".join(actions)
-        return (
-            "TELEGRAM TOOL ACTIONS (актуальный список):\n"
-            f"{chunks}\n"
-            "Используй tools ТОЛЬКО если пользователь просит действие в Telegram.\n"
-            "Если запрос аналитический/обычный текстовый — tools не используй.\n"
-            "Для обычного вопроса всегда приоритет у текстового ответа.\n"
-            "Для опасных действий передавай confirm=true."
+        chunks = "\n".join(self._tool_action_chunks(14))
+        return "\n".join(
+            [
+                "TELEGRAM TOOL ACTIONS (актуальный список):",
+                chunks,
+                "Используй tools ТОЛЬКО если пользователь просит действие в Telegram.",
+                "Если запрос аналитический/обычный текстовый — tools не используй.",
+                "Для обычного вопроса всегда приоритет у текстового ответа.",
+                "Для опасных действий передавай confirm=true.",
+            ]
         )
 
     async def _compose_impersonation_system_prompt(self, chat_id: int) -> str:
@@ -10169,3 +11674,5 @@ class CodexCLI(loader.Module):
 
     def _is_memory_enabled(self, chat_id: str) -> bool:
         return chat_id not in self.memory_disabled_chats
+
+
