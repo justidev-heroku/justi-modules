@@ -19,7 +19,7 @@
 # authors: @justidev
 # Description: Codex CLI module for Heroku.
 
-__version__ = (1, 3, 3)
+__version__ = (1, 4, 0)
 
 import asyncio
 import base64
@@ -49,6 +49,10 @@ from urllib import request as urllib_request
 import pytz
 from markdown_it import MarkdownIt
 import psutil
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 
 from telethon import types as tg_types
 from telethon.errors.rpcerrorlist import (
@@ -130,6 +134,8 @@ class CodexCLI(loader.Module):
         "cfg_auth_type_doc": "Провайдер авторизации: только codex-login.",
         "cfg_openai_api_key_doc": "API key для Codex/OpenAI-совместимого endpoint.",
         "cfg_openai_base_url_doc": "Базовый URL API (по умолчанию https://api.openai.com/v1).",
+        "cfg_image_model_doc": "Модель генерации изображений (по умолчанию gpt-image-2).",
+        "cfg_reasoning_mode_doc": "Уровень reasoning для Codex: low, medium, high, xhigh.",
         "cfg_buttons_doc": "Включить интерактивные кнопки.",
         "cfg_system_instruction_doc": "Системный промпт для Codex CLI.",
         "cfg_max_history_length_doc": "Макс. число пар вопрос-ответ в памяти. 0 — без лимита.",
@@ -241,6 +247,8 @@ class CodexCLI(loader.Module):
         "btn_approve_action": "✅ Принять",
         "btn_reject_action": "❌ Отклонить",
         "btn_stop_action": "📛 Стоп",
+        "btn_cimg_regenerate": "Перегенерировать",
+        "btn_cimg_show_prompt": "Показать промпт",
         "no_last_request": "Последний запрос не найден для повторной генерации.",
         "request_cancelled": "<tg-emoji emoji-id=5350470691701407492>⛔</tg-emoji>️ <b>Запрос отменен.</b>",
         "request_patched": "<tg-emoji emoji-id=5875145601682771643>✍️</tg-emoji> <b>Запрос обновлен и перезапущен.</b>",
@@ -295,6 +303,31 @@ class CodexCLI(loader.Module):
         "cdxch_result_caption": "Анализ последних {} сообщений",
         "cdxch_result_caption_from_chat": "Анализ последних {} сообщений из чата <b>{}</b>",
         "cdxch_chat_error": "<tg-emoji emoji-id=5332431395266524007>❗️</tg-emoji> <b>Ошибка доступа к чату</b> <code>{}</code>: <i>{}</i>",
+        "cimg_usage": "<tg-emoji emoji-id=5278753302023004775>ℹ️</tg-emoji> <b>Использование:</b> <code>.cimg &lt;промпт&gt;</code> или reply на сообщение с текстом.",
+        "cimg_processing": (
+            "<blockquote><tg-emoji emoji-id=5431456208487716895>🎨</tg-emoji> <b>Генерация...</b></blockquote>\n"
+            "<blockquote><tg-emoji emoji-id=5256079005731271025>📟</tg-emoji> <b>Модель:</b> <code>{}</code></blockquote>"
+        ),
+        "cimg_no_api_key": (
+            "<tg-emoji emoji-id=5332431395266524007>❗️</tg-emoji> "
+            "<b>Для .cimg нужен API key.</b>\n"
+            "Задайте: <code>.cdxauth apikey &lt;key&gt;</code>"
+        ),
+        "cimg_no_image": "<tg-emoji emoji-id=5332431395266524007>❗️</tg-emoji> <b>API не вернул изображение.</b>",
+        "cimg_error": "<tg-emoji emoji-id=5332431395266524007>❗️</tg-emoji> <b>Ошибка генерации:</b>\n<code>{}</code>",
+        "cimg_caption": (
+            "<tg-emoji emoji-id=5427009714745517609>✅</tg-emoji> <b>Готово!</b>\n"
+            "<tg-emoji emoji-id=5361837567463399422>🔮</tg-emoji> <b>Модель:</b> <code>{}</code>\n"
+            "<tg-emoji emoji-id=5256230583717079814>📝</tg-emoji> <b>Промпт:</b>\n"
+            "<blockquote>{}</blockquote>"
+        ),
+        "cimg_prompt_trimmed": "<i>Промпт обрезан до 512 символов. Нажмите «Показать промпт» для полного текста.</i>",
+        "cimg_prompt_file_caption": (
+            "<tg-emoji emoji-id=5256230583717079814>📝</tg-emoji> <b>Полный промпт</b>\n"
+            "<tg-emoji emoji-id=5361837567463399422>🔮</tg-emoji> <b>Модель:</b> <code>{}</code>"
+        ),
+        "cimg_callback_busy": "Генерация уже запущена, подождите.",
+        "cimg_callback_missing": "Сессия генерации устарела.",
         "cdxprompt_usage": "<tg-emoji emoji-id=5278753302023004775>ℹ️</tg-emoji> <b>Использование:</b>\n<code>.cdxprompt &lt;текст/пресет&gt;</code> — установить.\n<code>.cdxprompt -c</code> — очистить.\n<code>.cdxpresets</code> — база пресетов.",
         "cdxprompt_updated": "<tg-emoji emoji-id=5330561907671727296>✅</tg-emoji> <b>Системный промпт обновлен.</b>\nДлина: {} символов.",
         "cdxprompt_cleared": "<tg-emoji emoji-id=5370872568041471196>🗑</tg-emoji> <b>Системный промпт очищен.</b>",
@@ -372,12 +405,40 @@ class CodexCLI(loader.Module):
         "status_auth_type": "• Auth provider: <code>{}</code>",
         "status_codex": "• Codex CLI: {}",
         "status_model": "• Модель: <code>{}</code>",
+        "status_reasoning_mode": "• Reasoning mode: <code>{}</code>",
+        "status_image_model": "• Image model: <code>{}</code>",
         "status_set": "настроен",
         "status_missing": "не настроен",
         "status_ready": "готов",
         "status_not_ready": "не готов",
         "prod_status_title": "<tg-emoji emoji-id=5256230583717079814>📋</tg-emoji> <b>CodexCLI production status</b>",
         "prod_status_line": "• {}: <code>{}</code>",
+        "cdx_slash_help": (
+            "<tg-emoji emoji-id=5255971360965930740>🕔</tg-emoji> <b>Slash-команды CodexCLI:</b>\n"
+            "• <code>/status</code>\n"
+            "• <code>/model [name]</code>\n"
+            "• <code>/approvals [default|plan|auto-edit|yolo]</code>\n"
+            "• <code>/clear</code>\n"
+            "• <code>/reset</code>\n"
+            "• <code>/stop</code>\n"
+            "• <code>/auth</code>\n"
+            "• <code>/help</code>\n\n"
+            "<i>Slash-команды проксируются напрямую в Codex CLI.</i>"
+        ),
+        "cdx_slash_unknown": (
+            "<tg-emoji emoji-id=5409235172979672859>⚠️</tg-emoji> "
+            "<b>Неизвестная slash-команда:</b> <code>{}</code>\n"
+            "Используйте <code>/help</code>."
+        ),
+        "cdx_slash_running": "<tg-emoji emoji-id=5415941463764667665>⏳</tg-emoji> <b>Выполняю slash-команду Codex CLI:</b> <code>{}</code>",
+        "cdx_slash_cli_error": "<tg-emoji emoji-id=5332431395266524007>❗️</tg-emoji> <b>Codex CLI slash ошибка:</b>\n<code>{}</code>",
+        "cdx_slash_status_title": "<tg-emoji emoji-id=5256079005731271025>📟</tg-emoji> <b>Codex CLI status</b>",
+        "cdx_slash_status_line": "• {}: <code>{}</code>",
+        "cdx_slash_approval_updated": "<tg-emoji emoji-id=5330561907671727296>✅</tg-emoji> <b>Approval mode:</b> <code>{}</code>",
+        "cdx_slash_approval_usage": (
+            "<tg-emoji emoji-id=5278753302023004775>ℹ️</tg-emoji> "
+            "<b>Использование:</b> <code>/approvals [default|plan|auto-edit|yolo]</code>"
+        ),
         "automod_usage": "<b>Использование:</b> <code>.cdxamod on|off|status|rules &lt;текст&gt;|clear</code>",
         "automod_only_groups": "<tg-emoji emoji-id=5253864872780769235>❗️</tg-emoji> Automod работает только в группах/супергруппах.",
         "automod_enabled": "<tg-emoji emoji-id=5255813619702049821>✅</tg-emoji> AI-модератор включен в этом чате.",
@@ -489,6 +550,18 @@ class CodexCLI(loader.Module):
                 DEFAULT_OPENAI_BASE_URL,
                 self.strings["cfg_openai_base_url_doc"],
                 validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "image_model",
+                "gpt-image-2",
+                self.strings["cfg_image_model_doc"],
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "reasoning_mode",
+                "medium",
+                self.strings["cfg_reasoning_mode_doc"],
+                validator=loader.validators.Choice(["low", "medium", "high", "xhigh"]),
             ),
             loader.ConfigValue(
                 "interactive_buttons",
@@ -669,6 +742,16 @@ class CodexCLI(loader.Module):
         self.tools_registry = self._build_tools_registry()
         self._dialogs_cache_ts = 0.0
         self._dialogs_cache_items = []
+        self._status_box_version_cache = ""
+        self._status_box_version_ts = 0.0
+        self._last_codex_runtime_snapshot = {
+            "session_id": "",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+        self._cimg_jobs = {}
+        self._cimg_busy = set()
 
     async def client_ready(self, client, db):
         self.client = client
@@ -715,6 +798,10 @@ class CodexCLI(loader.Module):
     async def cdx(self, message: Message):
         """[текст или reply] — спросить у Codex CLI."""
         await self._sync_runtime_config()
+        slash_args = (utils.get_args_raw(message) or "").strip()
+        if slash_args.startswith("/"):
+            if await self._handle_cdx_slash_command(message, slash_args):
+                return
         status_msg = await self._create_processing_status(
             message,
             self.strings["processing"],
@@ -744,6 +831,978 @@ class CodexCLI(loader.Module):
     async def codex(self, message: Message):
         """[текст или reply] — алиас для .cdx."""
         await self.cdx(message)
+
+    async def _handle_cdx_slash_command(self, message: Message, raw_args: str) -> bool:
+        token = str(raw_args or "").strip()
+        if not token.startswith("/"):
+            return False
+        command, _, tail = token.partition(" ")
+        cmd = command.lower()
+        tail = tail.strip()
+        if cmd == "/status" and not tail:
+            box = await self._build_codex_cli_status_box()
+            await self._send_cdx_slash_output(message, box)
+            return True
+        slash_text = cmd + (f" {tail}" if tail else "")
+        status_msg = await self._answer_html(
+            message,
+            self.strings["cdx_slash_running"].format(utils.escape_html(slash_text)),
+        )
+        ok, cli_output = await self._run_cdx_slash_cli(slash_text)
+        if cli_output:
+            await self._send_cdx_slash_output(status_msg or message, cli_output)
+            return True
+        if ok:
+            await self._send_cdx_slash_output(status_msg or message, "Command completed (no output).")
+            return True
+        await self._answer_html(
+            status_msg or message,
+            self.strings["cdx_slash_cli_error"].format(
+                utils.escape_html("empty output")
+            ),
+        )
+        return True
+
+    async def _send_cdx_slash_output(self, entity, text: str):
+        content = str(text or "").strip()
+        if not content:
+            return await self._answer_html(
+                entity,
+                self.strings["cdx_slash_cli_error"].format(
+                    utils.escape_html("empty output")
+                ),
+            )
+        if len(content) > 12000:
+            file_obj = io.BytesIO(content.encode("utf-8"))
+            file_obj.name = "codex_slash_output.txt"
+            return await self.client.send_file(
+                entity.chat_id,
+                file=file_obj,
+                caption="<tg-emoji emoji-id=5956561916573782596>📝</tg-emoji> Codex slash output",
+                reply_to=self._resolve_entity_message_id(entity),
+                parse_mode="html",
+            )
+        return await self._answer_html(
+            entity,
+            f"<pre>{utils.escape_html(content)}</pre>",
+            reply_markup=None,
+        )
+
+    @staticmethod
+    def _is_inline_entity(entity) -> bool:
+        if entity is None:
+            return False
+        return bool(
+            getattr(entity, "inline_message_id", None)
+            or getattr(entity, "unit_id", None)
+        )
+
+    async def _try_edit_inline_image(
+        self,
+        entity,
+        caption_html: str,
+        image_bytes: bytes,
+        file_name: str,
+        reply_markup=None,
+    ) -> bool:
+        if not self._is_inline_entity(entity) or not hasattr(entity, "edit"):
+            return False
+
+        safe_caption = str(caption_html or "").strip()
+        if len(safe_caption) > 1000:
+            safe_caption = safe_caption[:997].rstrip() + "..."
+
+        media_url = await self._upload_inline_image_url(image_bytes, file_name)
+        if not media_url:
+            logger.warning("CIMG INLINE EDIT SKIP: upload_url is empty")
+            return False
+
+        attempts = []
+        if reply_markup is not None:
+            attempts.append(
+                {"photo": media_url, "text": safe_caption, "reply_markup": reply_markup}
+            )
+            attempts.append({"photo": media_url, "text": safe_caption})
+        else:
+            attempts.append({"photo": media_url, "text": safe_caption})
+
+        for idx, payload in enumerate(attempts, start=1):
+            try:
+                await entity.edit(
+                    payload["text"],
+                    photo=payload["photo"],
+                    **({"reply_markup": payload["reply_markup"]} if "reply_markup" in payload else {}),
+                )
+                logger.warning(
+                    "CIMG INLINE EDIT OK: attempt=%s via_url=%s",
+                    idx,
+                    media_url[:180],
+                )
+                return True
+            except Exception:
+                logger.exception("CIMG INLINE EDIT FAIL: attempt=%s", idx)
+        return False
+
+    @staticmethod
+    def _image_ext_to_content_type(ext: str) -> str:
+        safe_ext = str(ext or "").strip().lower()
+        if safe_ext == "jpeg":
+            safe_ext = "jpg"
+        mapping = {
+            "jpg": "image/jpeg",
+            "png": "image/png",
+            "gif": "image/gif",
+            "webp": "image/webp",
+            "bmp": "image/bmp",
+            "ico": "image/x-icon",
+        }
+        return mapping.get(safe_ext, "image/jpeg")
+
+    @staticmethod
+    def _build_multipart_form_body(
+        fields: dict,
+        file_field: str,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str,
+    ) -> tuple[bytes, str]:
+        boundary = f"----CodexCLIBoundary{uuid.uuid4().hex}"
+        out = io.BytesIO()
+
+        for key, value in (fields or {}).items():
+            out.write(f"--{boundary}\r\n".encode("utf-8"))
+            out.write(
+                f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode(
+                    "utf-8"
+                )
+            )
+            out.write(str(value).encode("utf-8"))
+            out.write(b"\r\n")
+
+        out.write(f"--{boundary}\r\n".encode("utf-8"))
+        out.write(
+            (
+                f'Content-Disposition: form-data; name="{file_field}"; '
+                f'filename="{filename}"\r\n'
+            ).encode("utf-8")
+        )
+        out.write(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+        out.write(file_bytes or b"")
+        out.write(b"\r\n")
+        out.write(f"--{boundary}--\r\n".encode("utf-8"))
+
+        return out.getvalue(), boundary
+
+    def _post_multipart_text(
+        self,
+        url: str,
+        fields: dict,
+        file_field: str,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str,
+        timeout: int = 60,
+    ) -> tuple[int, str]:
+        body, boundary = self._build_multipart_form_body(
+            fields=fields,
+            file_field=file_field,
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
+        headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "CodexCLI-InlineUpload/1.0",
+            "Accept": "*/*",
+        }
+        request_obj = urllib_request.Request(url, data=body, headers=headers, method="POST")
+        proxy = self._get_proxy()
+        opener = None
+        if proxy:
+            opener = urllib_request.build_opener(
+                urllib_request.ProxyHandler({"http": proxy, "https": proxy})
+            )
+
+        status = 0
+        text = ""
+        try:
+            if opener:
+                with opener.open(request_obj, timeout=timeout) as resp:
+                    status = int(resp.getcode() or 0)
+                    text = (resp.read() or b"").decode("utf-8", errors="ignore")
+            else:
+                with urllib_request.urlopen(request_obj, timeout=timeout) as resp:
+                    status = int(resp.getcode() or 0)
+                    text = (resp.read() or b"").decode("utf-8", errors="ignore")
+        except urllib_error.HTTPError as e:
+            status = int(e.code or 0)
+            text = (e.read() or b"").decode("utf-8", errors="ignore")
+        except urllib_error.URLError as e:
+            raise RuntimeError(f"upload request failed: {e}") from e
+
+        return status, text
+
+    def _upload_catbox_sync(
+        self, file_bytes: bytes, filename: str, content_type: str
+    ) -> str:
+        status, text = self._post_multipart_text(
+            "https://catbox.moe/user/api.php",
+            fields={"reqtype": "fileupload"},
+            file_field="fileToUpload",
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
+        return text.strip() if status == 200 else ""
+
+    def _upload_0x0_sync(
+        self, file_bytes: bytes, filename: str, content_type: str
+    ) -> str:
+        status, text = self._post_multipart_text(
+            "https://0x0.st",
+            fields={},
+            file_field="file",
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
+        return text.strip() if status == 200 else ""
+
+    def _upload_x0_sync(
+        self, file_bytes: bytes, filename: str, content_type: str
+    ) -> str:
+        status, text = self._post_multipart_text(
+            "https://x0.at",
+            fields={},
+            file_field="file",
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
+        return text.strip() if status == 200 else ""
+
+    def _upload_tmpfiles_sync(
+        self, file_bytes: bytes, filename: str, content_type: str
+    ) -> str:
+        status, text = self._post_multipart_text(
+            "https://tmpfiles.org/api/v1/upload",
+            fields={},
+            file_field="file",
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
+        if status != 200:
+            return ""
+        with contextlib.suppress(Exception):
+            data = json.loads(text)
+            if isinstance(data, dict):
+                raw_url = (
+                    data.get("data", {}).get("url")
+                    if isinstance(data.get("data"), dict)
+                    else None
+                )
+                if raw_url:
+                    return str(raw_url).replace("tmpfiles.org/", "tmpfiles.org/dl/")
+        return ""
+
+    async def _run_upload_worker(
+        self,
+        name: str,
+        worker,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str,
+    ) -> tuple[str, str]:
+        try:
+            url = await asyncio.to_thread(worker, file_bytes, filename, content_type)
+            return name, str(url or "").strip()
+        except Exception:
+            logger.exception("CIMG INLINE UPLOAD FAIL: host=%s", name)
+            return name, ""
+
+    async def _upload_inline_image_url(self, image_bytes: bytes, file_name: str) -> str:
+        raw = bytes(image_bytes or b"")
+        if len(raw) < 64:
+            logger.warning("CIMG INLINE UPLOAD SKIP: payload too small (%d bytes)", len(raw))
+            return ""
+
+        guessed_ext = (os.path.splitext(file_name or "")[1] or "").lstrip(".").lower()
+        if guessed_ext == "jpeg":
+            guessed_ext = "jpg"
+        if guessed_ext not in {"png", "jpg", "webp", "gif", "bmp", "ico"}:
+            guessed_ext = self._guess_image_extension(raw)
+        if guessed_ext == "jpeg":
+            guessed_ext = "jpg"
+        if guessed_ext not in {"png", "jpg", "webp", "gif", "bmp", "ico"}:
+            guessed_ext = "jpg"
+
+        safe_name = f"cimg_{uuid.uuid4().hex[:8]}.{guessed_ext}"
+        content_type = self._image_ext_to_content_type(guessed_ext)
+        logger.warning(
+            "CIMG INLINE UPLOAD START: name=%s len=%d content_type=%s",
+            safe_name,
+            len(raw),
+            content_type,
+        )
+
+        workers = [
+            ("x0", self._upload_x0_sync),
+            ("tmpfiles", self._upload_tmpfiles_sync),
+            ("catbox", self._upload_catbox_sync),
+            ("0x0", self._upload_0x0_sync),
+        ]
+        tasks = [
+            asyncio.create_task(
+                self._run_upload_worker(
+                    name,
+                    worker,
+                    raw,
+                    safe_name,
+                    content_type,
+                )
+            )
+            for name, worker in workers
+        ]
+
+        best_url = ""
+        try:
+            for task in asyncio.as_completed(tasks):
+                name, maybe_url = await task
+                if maybe_url.startswith("http://") or maybe_url.startswith("https://"):
+                    best_url = maybe_url.strip()
+                    logger.warning(
+                        "CIMG INLINE UPLOAD OK: host=%s url=%s",
+                        name,
+                        best_url[:220],
+                    )
+                    break
+                if maybe_url:
+                    logger.warning(
+                        "CIMG INLINE UPLOAD BAD URL: host=%s value=%s",
+                        name,
+                        maybe_url[:220],
+                    )
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+        if not best_url:
+            logger.warning("CIMG INLINE UPLOAD FAIL: no host returned url")
+        return best_url
+
+    @staticmethod
+    def _normalize_cimg_model_name(model: str) -> str:
+        raw = str(model or "").strip().lower()
+        if raw in {"gpt-image-1", "gpt-image-2"}:
+            return raw
+        return "gpt-image-2"
+
+    @staticmethod
+    def _resolve_entity_chat_id(entity) -> int:
+        chat_id = getattr(entity, "chat_id", None)
+        if chat_id:
+            return chat_id
+        query = getattr(entity, "form", None)
+        if isinstance(query, dict):
+            with contextlib.suppress(Exception):
+                return int(query.get("chat", 0) or 0)
+        return 0
+
+    @staticmethod
+    def _resolve_entity_reply_id(entity) -> int:
+        for attr in ("message_id", "id"):
+            value = getattr(entity, attr, None)
+            if value:
+                with contextlib.suppress(Exception):
+                    return int(value)
+        return 0
+
+    @staticmethod
+    def _sanitize_reply_to_id(value) -> int:
+        with contextlib.suppress(Exception):
+            val = int(value or 0)
+            if -2147483648 <= val <= 2147483647:
+                return val
+        return 0
+
+    def _register_cimg_job(
+        self,
+        prompt: str,
+        image_model: str,
+        chat_id: int,
+        reply_to: int = 0,
+        token: str = "",
+    ) -> str:
+        job_token = str(token or "").strip() or uuid.uuid4().hex
+        self._cimg_jobs[job_token] = {
+            "prompt": str(prompt or ""),
+            "model": self._normalize_cimg_model_name(image_model),
+            "chat_id": int(chat_id or 0),
+            "reply_to": int(reply_to or 0),
+            "updated_at": datetime.utcnow().timestamp(),
+        }
+        if len(self._cimg_jobs) > 300:
+            stale = sorted(
+                self._cimg_jobs.items(),
+                key=lambda item: float(item[1].get("updated_at") or 0),
+            )[:120]
+            for sid, _ in stale:
+                self._cimg_jobs.pop(sid, None)
+                self._cimg_busy.discard(sid)
+        return job_token
+
+    def _build_cimg_caption(self, image_model: str, prompt: str) -> tuple[str, bool]:
+        raw_prompt = str(prompt or "").strip()
+        trimmed = len(raw_prompt) > 512
+        prompt_preview = raw_prompt[:512].rstrip()
+        if trimmed:
+            prompt_preview += "..."
+        caption = self.strings["cimg_caption"].format(
+            utils.escape_html(image_model),
+            utils.escape_html(prompt_preview),
+        )
+        if trimmed:
+            caption += "\n" + self.strings["cimg_prompt_trimmed"]
+        return caption, trimmed
+
+    def _build_cimg_buttons(
+        self,
+        job_token: str,
+        image_model: str,
+        prompt_trimmed: bool,
+        model_menu: bool = False,
+    ):
+        current = self._normalize_cimg_model_name(image_model)
+        if model_menu:
+            rows = [
+                [
+                    {
+                        "text": "1️⃣ gpt-image-1" + (" ✅" if current == "gpt-image-1" else ""),
+                        "callback": self._cimg_select_model_callback,
+                        "args": (job_token, "gpt-image-1"),
+                    },
+                    {
+                        "text": "2️⃣ gpt-image-2" + (" ✅" if current == "gpt-image-2" else ""),
+                        "callback": self._cimg_select_model_callback,
+                        "args": (job_token, "gpt-image-2"),
+                    },
+                ],
+                [
+                    {
+                        "text": "◀️ Назад",
+                        "callback": self._cimg_back_menu_callback,
+                        "args": (job_token,),
+                    }
+                ],
+            ]
+            if prompt_trimmed:
+                rows.append(
+                    [
+                        {
+                            "text": "📄 " + self.strings["btn_cimg_show_prompt"],
+                            "callback": self._cimg_show_prompt_callback,
+                            "args": (job_token,),
+                        }
+                    ]
+                )
+            return rows
+
+        rows = [
+            [
+                {
+                    "text": "🔄 " + self.strings["btn_cimg_regenerate"],
+                    "callback": self._cimg_regenerate_callback,
+                    "args": (job_token,),
+                },
+                {
+                    "text": "🎛 Выбрать модель",
+                    "callback": self._cimg_open_model_menu_callback,
+                    "args": (job_token,),
+                },
+            ]
+        ]
+        if prompt_trimmed:
+            rows.append(
+                [
+                    {
+                        "text": "📄 " + self.strings["btn_cimg_show_prompt"],
+                        "callback": self._cimg_show_prompt_callback,
+                        "args": (job_token,),
+                    }
+                ]
+            )
+        return rows
+
+    async def _run_cimg_generation(
+        self,
+        entry_entity,
+        prompt: str,
+        image_model: str,
+        *,
+        status_entity=None,
+        reply_to: int = 0,
+        job_token: str = "",
+    ):
+        api_key = self._get_effective_openai_api_key()
+        if not api_key:
+            return await self._answer_html(entry_entity, self.strings["cimg_no_api_key"])
+
+        normalized_model = self._normalize_cimg_model_name(image_model)
+        prompt_text = str(prompt or "").strip()
+        if not prompt_text:
+            return await self._answer_html(entry_entity, self.strings["cimg_usage"])
+
+        status_target = status_entity
+        if status_target is None:
+            status_target = await self._create_processing_status(
+                entry_entity,
+                self.strings["cimg_processing"].format(utils.escape_html(normalized_model)),
+                buttons=[[{"text": "...", "action": "close"}]],
+            )
+        else:
+            await self._edit_html(
+                status_target,
+                self.strings["cimg_processing"].format(utils.escape_html(normalized_model)),
+                reply_markup=None,
+            )
+
+        chat_id = self._resolve_entity_chat_id(entry_entity)
+        if not chat_id:
+            chat_id = self._resolve_entity_chat_id(status_target)
+        if not chat_id:
+            with contextlib.suppress(Exception):
+                chat_id = int(getattr(entry_entity, "chat_id", 0) or 0)
+        reply_to_id = self._sanitize_reply_to_id(
+            int(reply_to or 0) or self._resolve_entity_reply_id(entry_entity)
+        )
+
+        logger.warning(
+            "CIMG START: chat_id=%s entity_mid=%s model=%s prompt_len=%d",
+            chat_id or None,
+            self._resolve_entity_reply_id(entry_entity) or None,
+            normalized_model,
+            len(prompt_text),
+        )
+
+        try:
+            image_bytes, ext = await self._generate_image_bytes(
+                prompt=prompt_text,
+                image_model=normalized_model,
+            )
+            logger.warning(
+                "CIMG GENERATED: len=%d ext=%s head=%s",
+                len(image_bytes or b""),
+                ext or "n/a",
+                image_bytes[:16].hex() if image_bytes else "EMPTY",
+            )
+            if not image_bytes:
+                return await self._answer_html(status_target, self.strings["cimg_no_image"])
+            if not self._is_probably_image_bytes(image_bytes):
+                raise RuntimeError("API вернул данные, которые не похожи на валидное изображение.")
+
+            image_bytes, ext = await asyncio.to_thread(
+                self._sanitize_image_for_telegram,
+                image_bytes,
+                ext,
+            )
+            image_bytes, ext = await asyncio.to_thread(
+                self._prepare_photo_payload_for_telegram,
+                image_bytes,
+                ext,
+            )
+            logger.warning(
+                "CIMG NORMALIZED: len=%d ext=%s head=%s",
+                len(image_bytes or b""),
+                ext or "n/a",
+                image_bytes[:16].hex() if image_bytes else "EMPTY",
+            )
+            if not self._is_probably_image_bytes(image_bytes):
+                raise RuntimeError("После нормализации изображение стало невалидным.")
+            if len(image_bytes) < 64:
+                raise RuntimeError(f"image_bytes слишком мал: {len(image_bytes)} байт")
+
+            safe_ext = (ext or "png").strip().lower()
+            if safe_ext == "jpeg":
+                safe_ext = "jpg"
+            if safe_ext not in {"png", "jpg", "webp", "gif", "bmp", "ico"}:
+                safe_ext = "jpg"
+            file_name = f"cimg_{uuid.uuid4().hex[:8]}.{safe_ext}"
+
+            media_caption, prompt_trimmed = self._build_cimg_caption(
+                normalized_model,
+                prompt_text,
+            )
+            token = self._register_cimg_job(
+                prompt=prompt_text,
+                image_model=normalized_model,
+                chat_id=chat_id,
+                reply_to=reply_to_id,
+                token=job_token,
+            )
+            media_buttons = self._build_cimg_buttons(
+                token,
+                normalized_model,
+                prompt_trimmed,
+            )
+
+            logger.warning(
+                "CIMG DEBUG: len=%d ext=%s name=%s header=%s token=%s",
+                len(image_bytes),
+                safe_ext,
+                file_name,
+                image_bytes[:16].hex() if image_bytes else "EMPTY",
+                token[:8],
+            )
+
+            if await self._try_edit_inline_image(
+                status_target,
+                media_caption,
+                image_bytes,
+                file_name,
+                reply_markup=media_buttons,
+            ):
+                return
+
+            send_client = getattr(self, "_client", None) or self.client
+            logger.warning(
+                "CIMG SEND MODE: inline_fallback chat_id=%s reply_to=%s",
+                chat_id or None,
+                reply_to_id or None,
+            )
+            out = io.BytesIO(image_bytes)
+            out.name = file_name
+            out.seek(0)
+            try:
+                await send_client.send_file(
+                    chat_id,
+                    out,
+                    caption=media_caption,
+                    reply_to=reply_to_id or None,
+                    force_document=False,
+                    parse_mode="html",
+                )
+                logger.warning("CIMG SEND OK: method=imagegen_like_bytes")
+            except Exception as first_err:
+                logger.exception("CIMG SEND ATTEMPT FAIL: imagegen_like_bytes")
+                out = io.BytesIO(image_bytes)
+                out.name = file_name
+                out.seek(0)
+                sent = await send_client.send_file(
+                    chat_id,
+                    out,
+                    caption=None,
+                    reply_to=reply_to_id or None,
+                    force_document=False,
+                )
+                with contextlib.suppress(Exception):
+                    await send_client.send_message(
+                        chat_id,
+                        media_caption,
+                        parse_mode="html",
+                        reply_to=getattr(sent, "id", None) or (reply_to_id or None),
+                    )
+                logger.warning(
+                    "CIMG SEND OK: method=imagegen_like_bytes_no_caption fallback_from=%s",
+                    type(first_err).__name__,
+                )
+            with contextlib.suppress(Exception):
+                if status_target is not entry_entity and hasattr(status_target, "delete"):
+                    await status_target.delete()
+            return
+        except Exception as e:
+            logger.exception(
+                "CIMG FINAL FAIL: chat_id=%s exc_type=%s exc=%r",
+                chat_id or None,
+                type(e).__name__,
+                e,
+            )
+            await self._answer_html(
+                status_target or entry_entity,
+                self.strings["cimg_error"].format(
+                    utils.escape_html(str(e)[:1200])
+                ),
+                reply_markup=None,
+            )
+
+    def _get_slash_workspace_dir(self) -> str:
+        workspace_dir = os.path.expanduser("~")
+        preferred_repo = os.path.join(workspace_dir, "Heroku")
+        if os.path.isdir(os.path.join(preferred_repo, ".git")):
+            return preferred_repo
+        return workspace_dir
+
+    @staticmethod
+    def _compact_num(value: int) -> str:
+        try:
+            n = int(value or 0)
+        except Exception:
+            n = 0
+        sign = "-" if n < 0 else ""
+        n = abs(n)
+        if n >= 1_000_000:
+            frac = n / 1_000_000
+            text = f"{frac:.2f}".rstrip("0").rstrip(".")
+            return f"{sign}{text}M"
+        if n >= 1_000:
+            frac = n / 1_000
+            text = f"{frac:.2f}".rstrip("0").rstrip(".")
+            return f"{sign}{text}K"
+        return f"{sign}{n}"
+
+    @staticmethod
+    def _status_box_line(left: str, width: int = 76) -> str:
+        body = str(left or "")
+        if len(body) > width:
+            body = body[: width - 1]
+        return f"│ {body.ljust(width)} │"
+
+    async def _get_codex_cli_version(self) -> str:
+        now_ts = datetime.utcnow().timestamp()
+        cached = str(self._status_box_version_cache or "").strip()
+        codex_path = self._get_codex_binary()
+        if not codex_path:
+            return "unknown"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                codex_path,
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._build_subprocess_env(),
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8)
+            output = "\n".join(
+                part
+                for part in [
+                    (stdout or b"").decode("utf-8", errors="ignore"),
+                    (stderr or b"").decode("utf-8", errors="ignore"),
+                ]
+                if part
+            )
+            match = re.search(r"\b(v?\d+\.\d+\.\d+)\b", output)
+            version = match.group(1) if match else "unknown"
+            if version.startswith("v"):
+                version = version[1:]
+            self._status_box_version_cache = version
+            self._status_box_version_ts = now_ts
+            return version
+        except Exception:
+            return cached or "unknown"
+
+    def _read_last_native_status_snapshot(self) -> dict:
+        history_path = os.path.join(self._get_user_codex_dir(), "history.jsonl")
+        if not os.path.isfile(history_path):
+            return {}
+        recent = deque(maxlen=400)
+        with contextlib.suppress(Exception):
+            with open(history_path, "r", encoding="utf-8") as file_obj:
+                for line in file_obj:
+                    raw = str(line or "").strip()
+                    if raw:
+                        recent.append(raw)
+        if not recent:
+            return {}
+
+        def _extract_value(text: str, label: str) -> str:
+            match = re.search(rf"{re.escape(label)}\s*:\s*(.+)", text)
+            if not match:
+                return ""
+            value = match.group(1).strip()
+            if value.endswith("│"):
+                value = value[:-1].rstrip()
+            return value.strip()
+
+        for raw in reversed(recent):
+            payload = {}
+            with contextlib.suppress(Exception):
+                payload = json.loads(raw) or {}
+            if not isinstance(payload, dict):
+                continue
+            text = str(payload.get("text") or "")
+            if "OpenAI Codex (v" not in text or "Token usage:" not in text:
+                continue
+            snapshot = {
+                "version": "",
+                "model_line": _extract_value(text, "Model"),
+                "directory": _extract_value(text, "Directory"),
+                "permissions": _extract_value(text, "Permissions"),
+                "agents": _extract_value(text, "Agents.md"),
+                "account": _extract_value(text, "Account"),
+                "collaboration_mode": _extract_value(text, "Collaboration mode"),
+                "session": _extract_value(text, "Session"),
+                "token_usage": _extract_value(text, "Token usage"),
+                "context_window": _extract_value(text, "Context window"),
+                "limits": _extract_value(text, "Limits"),
+            }
+            version_match = re.search(r"OpenAI Codex \(v([0-9.]+)\)", text)
+            if version_match:
+                snapshot["version"] = version_match.group(1).strip()
+            return snapshot
+        return {}
+
+    async def _build_codex_cli_status_box(self) -> str:
+        native_status = self._read_last_native_status_snapshot()
+        version = native_status.get("version") or await self._get_codex_cli_version()
+        model = (self.config.get("codex_model") or "gpt-5.3-codex").strip()
+        reasoning = (self.config.get("reasoning_mode") or "medium").strip().lower()
+        workspace_dir = self._get_slash_workspace_dir()
+        home_dir = os.path.expanduser("~")
+        if workspace_dir.startswith(home_dir):
+            suffix = workspace_dir[len(home_dir):].strip("/")
+            display_dir = "~" if not suffix else f"~/{suffix}"
+        else:
+            display_dir = workspace_dir
+        model_line = native_status.get("model_line") or f"{model} (reasoning {reasoning}, summaries auto)"
+        display_dir = native_status.get("directory") or display_dir
+        approval_mode = str(self.config.get("approval_mode") or "default").strip().lower()
+        if approval_mode == "yolo":
+            permissions = "YOLO (danger-full-access, never)"
+        elif approval_mode in {"plan", "auto-edit"}:
+            permissions = "Auto (workspace-write, never)"
+        else:
+            permissions = "Custom (workspace-write, on-request)"
+        permissions = native_status.get("permissions") or permissions
+        agents_name = native_status.get("agents") or (
+            "AGENTS.md" if os.path.isfile(os.path.join(home_dir, "AGENTS.md")) else "none"
+        )
+        auth_type = self._get_auth_type()
+        if auth_type == "codex-login" and self._has_codex_login_artifacts():
+            account_line = "ChatGPT login configured"
+        elif self._get_effective_openai_api_key():
+            account_line = "API key configured (run codex login to use ChatGPT)"
+        else:
+            account_line = "Not configured"
+        account_line = native_status.get("account") or account_line
+        collaboration_mode = native_status.get("collaboration_mode") or "Default"
+        snap = dict(self._last_codex_runtime_snapshot or {})
+        session_id = (
+            native_status.get("session")
+            or str(snap.get("session_id") or "").strip()
+            or "—"
+        )
+        in_tok = int(snap.get("input_tokens") or 0)
+        out_tok = int(snap.get("output_tokens") or 0)
+        total_tok = int(snap.get("total_tokens") or (in_tok + out_tok))
+        if total_tok > 0:
+            token_usage = (
+                f"{self._compact_num(total_tok)} total  "
+                f"({self._compact_num(in_tok)} input + {self._compact_num(out_tok)} output)"
+            )
+        else:
+            token_usage = "data not available yet"
+        token_usage = native_status.get("token_usage") or token_usage
+        context_window = native_status.get("context_window") or "data not available yet"
+        limits_line = native_status.get("limits") or "data not available yet"
+        lines = [
+            "╭────────────────────────────────────────────────────────────────────────────╮",
+            self._status_box_line(f" >_ OpenAI Codex (v{version})"),
+            self._status_box_line(""),
+            self._status_box_line(" Visit https://chatgpt.com/codex/settings/usage for up-to-date"),
+            self._status_box_line(" information on rate limits and credits"),
+            self._status_box_line(""),
+            self._status_box_line(f"  Model:                {model_line}"),
+            self._status_box_line(f"  Directory:            {display_dir}"),
+            self._status_box_line(f"  Permissions:          {permissions}"),
+            self._status_box_line(f"  Agents.md:            {agents_name}"),
+            self._status_box_line(f"  Account:              {account_line}"),
+            self._status_box_line(f"  Collaboration mode:   {collaboration_mode}"),
+            self._status_box_line(f"  Session:              {session_id}"),
+            self._status_box_line(""),
+            self._status_box_line(f"  Token usage:          {token_usage}"),
+            self._status_box_line(f"  Context window:       {context_window}"),
+            self._status_box_line(f"  Limits:               {limits_line}"),
+            "╰────────────────────────────────────────────────────────────────────────────╯",
+        ]
+        return "\n".join(lines)
+
+    async def _run_cdx_slash_cli(self, slash_command: str) -> tuple[bool, str]:
+        codex_path = self._get_codex_binary()
+        if not codex_path:
+            return False, "codex binary not found"
+        selected_model = (self.config.get("codex_model") or "coder-model").strip()
+        approval_mode = str(self.config.get("approval_mode") or "default").strip().lower()
+        workspace_dir = self._get_slash_workspace_dir()
+        env = self._build_subprocess_env(include_api_key=True)
+        runtime_home = os.path.expanduser("~")
+        runtime_codex = os.path.join(runtime_home, ".codex")
+        os.makedirs(runtime_codex, exist_ok=True)
+        env["HOME"] = runtime_home
+        env["CODEX_HOME"] = runtime_codex
+        env["CODEX_SYSTEM_SETTINGS_PATH"] = os.path.join(
+            runtime_codex, "system-settings.json"
+        )
+        env["CODEX_SYSTEM_DEFAULTS_PATH"] = os.path.join(
+            runtime_codex, "system-defaults.json"
+        )
+        for system_name in ("system-settings.json", "system-defaults.json"):
+            system_path = os.path.join(runtime_codex, system_name)
+            if not os.path.exists(system_path):
+                with open(system_path, "w", encoding="utf-8") as file_obj:
+                    json.dump({"permissions": {"deny": []}}, file_obj, ensure_ascii=False)
+        args = [
+            codex_path,
+            "--cd",
+            workspace_dir,
+            "exec",
+            "--skip-git-repo-check",
+        ]
+        if approval_mode == "yolo":
+            args.append("--dangerously-bypass-approvals-and-sandbox")
+        elif approval_mode in {"plan", "auto-edit"}:
+            args.append("--full-auto")
+        else:
+            args.extend(["--sandbox", "workspace-write"])
+        if selected_model:
+            args.extend(["--model", selected_model])
+        base_url = self._get_effective_openai_base_url()
+        api_key = self._get_effective_openai_api_key()
+        if base_url and api_key:
+            args.extend(["-c", f"openai_base_url={base_url}"])
+        args.append(str(slash_command or "").strip() or "/status")
+        creation_kwargs = {
+            "cwd": workspace_dir,
+            "stdin": asyncio.subprocess.DEVNULL,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "env": env,
+        }
+        if os.name != "nt":
+            creation_kwargs["start_new_session"] = True
+        proc = await asyncio.create_subprocess_exec(*args, **creation_kwargs)
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=max(40, min(CODEX_TIMEOUT, 180))
+            )
+        except asyncio.TimeoutError:
+            with contextlib.suppress(Exception):
+                await self._terminate_process(proc)
+            return False, "timeout"
+        output = "\n".join(
+            part
+            for part in [
+                (stdout or b"").decode("utf-8", errors="ignore"),
+                (stderr or b"").decode("utf-8", errors="ignore"),
+            ]
+            if part
+        )
+        ansi_escape = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+        cleaned_lines = []
+        for raw_line in str(output or "").splitlines():
+            line = ansi_escape.sub("", raw_line).rstrip()
+            if not line:
+                cleaned_lines.append("")
+                continue
+            if "WARNING: proceeding, even though we could not update PATH" in line:
+                continue
+            if line.strip() == "Reading additional input from stdin...":
+                continue
+            cleaned_lines.append(line)
+        cleaned = "\n".join(cleaned_lines).strip()
+        return proc.returncode == 0, cleaned or f"exit={proc.returncode}"
 
     @loader.command()
     async def cdxstop(self, message: Message):
@@ -905,6 +1964,8 @@ class CodexCLI(loader.Module):
                 f"• <tg-emoji emoji-id=5253952855185829086>⚙️</tg-emoji> <code>cli_backend</code>: <b>{utils.escape_html(self.config['cli_backend'])}</b>",
                 f"• <tg-emoji emoji-id=5253647062104287098>🔓</tg-emoji> <code>auth_type</code>: <b>{utils.escape_html(self._get_auth_type())}</b>",
                 f"• <tg-emoji emoji-id=5256079005731271025>📟</tg-emoji> <code>codex_model</code>: <b>{utils.escape_html(self.config['codex_model'] or 'coder-model')}</b>",
+                f"• <tg-emoji emoji-id=5253590213917158323>💬</tg-emoji> <code>reasoning_mode</code>: <b>{utils.escape_html(self.config['reasoning_mode'])}</b>",
+                f"• <tg-emoji emoji-id=5348203502710843682>🎨</tg-emoji> <code>image_model</code>: <b>{utils.escape_html(self.config['image_model'] or 'gpt-image-2')}</b>",
                 f"• <tg-emoji emoji-id=5253713110111365241>📍</tg-emoji> <code>timezone</code>: <b>{utils.escape_html(self.config['timezone'])}</b>",
             ]
         )
@@ -1133,6 +2194,27 @@ class CodexCLI(loader.Module):
                 await self._answer_html(status_msg, text)
         except Exception as e:
             await self._answer_html(status_msg, self._handle_error(e))
+
+    @loader.command()
+    async def cimg(self, message: Message):
+        """<промпт> — генерация изображения через OpenAI Images API."""
+        await self._sync_runtime_config()
+        prompt = (utils.get_args_raw(message) or "").strip()
+        if not prompt:
+            reply = await message.get_reply_message()
+            prompt = self._extract_message_text(reply)
+        if not prompt:
+            return await self._answer_html(message, self.strings["cimg_usage"])
+        image_model = self._normalize_cimg_model_name(
+            self.config.get("image_model") or "gpt-image-2"
+        )
+        reply_to = self._get_reply_target_id(message)
+        await self._run_cimg_generation(
+            message,
+            prompt,
+            image_model,
+            reply_to=reply_to,
+        )
 
     @loader.command()
     async def cdxprompt(self, message: Message):
@@ -2018,13 +3100,19 @@ class CodexCLI(loader.Module):
             generated_files = []
             last_tool_success_details = None
             original_task_text = current_payload.get("text") or ""
+            tool_intent_source = (
+                str(current_payload.get("display_prompt") or "").strip()
+                or original_task_text
+            )
             tool_mode_enabled = (
                 bool(self.config["allow_tg_tools"])
                 and not impersonation_mode
-                and self.toolintent(original_task_text)
+                and self.toolintent(tool_intent_source)
             )
+            current_payload = dict(current_payload)
+            current_payload["tool_mode_enabled"] = bool(tool_mode_enabled)
             status_tags = []
-            lower_task = original_task_text.lower()
+            lower_task = tool_intent_source.lower()
             if impersonation_mode:
                 status_tags.append("auto")
             if re.search(r"\bbatch\b|multi[\s_-]?action|bulk", lower_task):
@@ -2055,38 +3143,8 @@ class CodexCLI(loader.Module):
                         base_message_id=base_message_id,
                     )
 
-            if not impersonation_mode:
-                fast_track_candidate = bool(
-                    re.search(
-                        r"(поставь реакцию на прошлое|лайк на последнее|реакцию на последнее|напиши последнему)",
-                        lower_task,
-                    )
-                )
-                if fast_track_candidate:
-                    await _show_embedded_tool_status("fast_track_auto", 1, 1)
-                    try:
-                        fast_track_text = await asyncio.wait_for(
-                            self._try_auto_action(chat_id, original_task_text),
-                            timeout=20,
-                        )
-                    except asyncio.TimeoutError:
-                        fast_track_text = None
-                        logger.warning(
-                            "fast_track_auto timed out for chat_id=%s", chat_id
-                        )
-                    if fast_track_text:
-                        action_title = (
-                            getattr(self, "_last_auto_action_name", "")
-                            or "fast_track_auto"
-                        )
-                        await _show_embedded_tool_status(action_title, 1, 1)
-                        target_entity = call or status_msg or msg_obj or message
-                        await self._answer_html(
-                            target_entity,
-                            fast_track_text,
-                            reply_markup=None,
-                        )
-                        return ""
+            # Авто-fast-track действия отключены: Telegram tools должны запускаться
+            # только по явному tool-call от модели.
             max_tool_turns = 5
             agent_started_at = asyncio.get_running_loop().time()
             agent_tool_step = 0
@@ -2137,39 +3195,6 @@ class CodexCLI(loader.Module):
                             f"Без дополнительного текста и объяснений."
                         )
                         continue
-                    if (
-                        tool_mode_enabled
-                        and turn == 0
-                        and re.search(
-                            r"(мне нужно|давай|давайте|let me|i need to|first,?\s+i need)",
-                            candidate_text.lower(),
-                        )
-                    ):
-                        forced_tool = (
-                            self._extract_direct_tool_from_text(original_task_text)
-                            if self.toolintent(original_task_text)
-                            else None
-                        )
-                        if forced_tool:
-                            tool_result = await self._execute_telegram_tool(
-                                chat_id,
-                                json.dumps(forced_tool, ensure_ascii=False),
-                            )
-                    with contextlib.suppress(Exception):
-                        forced_json = json.loads(tool_result)
-                        if forced_json.get("status") == "success":
-                            det = forced_json.get("details") or {}
-                            result_text = self._format_tool_success_details(det) or (
-                                f"Готово: выполнено действие {det.get('action') or forced_tool.get('action')}."
-                            )
-                            if result_text.startswith("Готово: выполнено действие"):
-                                if det.get("target_chat") is not None:
-                                    result_text += f" chat={det.get('target_chat')}"
-                                if det.get("sent") is not None:
-                                    result_text += f" sent={det.get('sent')}"
-                                if det.get("replied") is not None:
-                                    result_text += f" replied={det.get('replied')}"
-                            break
                     result_text = candidate_text
                     break
                 tool_json_str = json.dumps(tool_json_call, ensure_ascii=False) if tool_json_call else (tool_match.group(1) or "").strip()
@@ -2263,59 +3288,8 @@ class CodexCLI(loader.Module):
                         result_text = final_text
                 except Exception as e:
                     logger.warning("Final answer generation failed: %s", e)
-            if (
-                not impersonation_mode
-                and not re.search(
-                    r"<telegram_tool>.*?</telegram_tool>",
-                    result_text or "",
-                    flags=re.IGNORECASE | re.DOTALL,
-                )
-                and re.search(
-                    r"(unable to|не могу|не удалось|tool returned an error|action .* not supported|unsupported action|tool is not available|not available in this environment|инструмент.*недоступен|инструмент.*не доступен|telegram_tool недоступен)",
-                    (result_text or "").lower(),
-                )
-            ):
-                forced_tool = (
-                    self._extract_direct_tool_from_text(original_task_text)
-                    if self.toolintent(original_task_text)
-                    else None
-                )
-                if forced_tool:
-                    tool_result = await self._execute_telegram_tool(
-                        chat_id,
-                        json.dumps(forced_tool, ensure_ascii=False),
-                    )
-                    try:
-                        forced_json = json.loads(tool_result)
-                    except Exception:
-                        forced_json = {"status": "error", "error": tool_result}
-                    if forced_json.get("status") == "success":
-                        det = forced_json.get("details") or {}
-                        action_done = det.get("action") or forced_tool.get("action")
-                        result_text = self._format_tool_success_details(det) or f"Готово: выполнено действие {action_done}."
-                        if result_text.startswith("Готово: выполнено действие"):
-                            if det.get("target_chat") is not None:
-                                result_text += f" chat={det.get('target_chat')}"
-                            if det.get("message_id") is not None:
-                                result_text += f" message_id={det.get('message_id')}"
-                            if det.get("replied") is not None:
-                                result_text += f" replied={det.get('replied')}"
-                    else:
-                        action_done = forced_tool.get("action") or "unknown_action"
-                        result_text = (
-                            f"Не удалось выполнить {action_done}. "
-                            f"Точная ошибка: {forced_json.get('error') or 'unknown error'}"
-                        )
             if not impersonation_mode:
                 lowered_task = (original_task_text or "").lower()
-                has_tool_markup = bool(
-                    re.search(
-                        r"<telegram_tool>.*?</telegram_tool>",
-                        raw_result_text or "",
-                        flags=re.IGNORECASE | re.DOTALL,
-                    )
-                )
-                has_tool_json = bool(self._extract_function_tool_call(raw_result_text))
                 looks_like_raw_dump = bool(
                     re.search(r"(id\s*:|участник|participants?)", result_text or "", re.IGNORECASE)
                 )
@@ -2339,169 +3313,17 @@ class CodexCLI(loader.Module):
                         "admin_finder", {"text": result_text}
                     )
                     result_text = f"{result_text}\n\n{agent_extra}".strip()
-
-                wants_like = bool(
-                    re.search(r"(поставь.*лайк|реакц|лайк на последнее)", lowered_task)
-                )
-                wants_send = bool(
-                    re.search(r"(отправь сообщение|напиши последнему|сообщение последнему)", lowered_task)
-                )
-                wants_contacts_count = bool(
-                    re.search(
-                        r"(?:сколько|количеств|число|count).*(?:контакт|contact)|(?:контакт|contact).*(?:сколько|количеств|число|count)",
-                        lowered_task,
-                    )
-                )
-                wants_who_is_reply = bool(
-                    re.search(
-                        r"^(?:кто\s+это|кто\s+он|кто\s+она|who\s+is\s+this)\??$|(?:кто\s+это\??|what\s+user\s+is\s+this)",
-                        lowered_task.strip(),
-                    )
-                )
-                wants_quote_style = bool(
-                    re.search(r"(в\s+цитат|цитатой|blockquote|оформи\s+цитат)", lowered_task)
-                )
-                tool_already_executed = bool(agent_tool_step > 0)
-                if (
-                    self.config["allow_tg_tools"]
-                    and wants_like
-                    and not tool_already_executed
-                    and not (has_tool_markup or has_tool_json)
-                ):
-                    auto_tool = {
-                        "action": "send_reaction_last",
-                        "emoji": "<tg-emoji emoji-id=5253617001628181935>👌</tg-emoji>",
-                    }
-                    await _show_embedded_tool_status("send_reaction_last", 1, 1)
-                    auto_result_raw = await self._execute_telegram_tool(
-                        chat_id, json.dumps(auto_tool, ensure_ascii=False)
-                    )
-                    with contextlib.suppress(Exception):
-                        auto_result = json.loads(auto_result_raw)
-                        if auto_result.get("status") == "success":
-                            pass
-                if (
-                    self.config["allow_tg_tools"]
-                    and wants_send
-                    and not tool_already_executed
-                    and not (has_tool_markup or has_tool_json)
-                ):
-                    outbound_text = "Привет! Это авто-ответ по вашему запросу."
-                    custom_msg = re.search(
-                        r"(?:отправь сообщение|напиши последнему)\s*[:\-]?\s*[\"«](.+?)[\"»]",
-                        original_task_text or "",
-                        flags=re.IGNORECASE | re.DOTALL,
-                    )
-                    if custom_msg:
-                        outbound_text = custom_msg.group(1).strip() or outbound_text
-                    target_user_id_match = re.search(
-                        r"ID\s*:\s*(\d{5,})",
-                        raw_result_text or "",
-                        flags=re.IGNORECASE,
-                    )
-                    auto_tool = {
-                        "action": "send_message_last",
-                        "text": outbound_text,
-                    }
-                    if target_user_id_match:
-                        auto_tool = {
-                            "action": "send_message",
-                            "target_chat": int(target_user_id_match.group(1)),
-                            "text": outbound_text,
-                        }
-                    if wants_quote_style:
-                        auto_tool["style"] = "blockquote"
-                    await _show_embedded_tool_status(
-                        auto_tool.get("action") or "send_message_last", 1, 1
-                    )
-                    auto_result_raw = await self._execute_telegram_tool(
-                        chat_id, json.dumps(auto_tool, ensure_ascii=False)
-                    )
-                    with contextlib.suppress(Exception):
-                        auto_result = json.loads(auto_result_raw)
-                        if auto_result.get("status") == "success":
-                            pass
-                if (
-                    self.config["allow_tg_tools"]
-                    and wants_contacts_count
-                    and not tool_already_executed
-                    and not (has_tool_markup or has_tool_json)
-                ):
-                    auto_tool = {"action": "get_contacts_count"}
-                    await _show_embedded_tool_status("get_contacts_count", 1, 1)
-                    auto_result_raw = await self._execute_telegram_tool(
-                        chat_id, json.dumps(auto_tool, ensure_ascii=False)
-                    )
-                    with contextlib.suppress(Exception):
-                        auto_result = json.loads(auto_result_raw)
-                        if auto_result.get("status") == "success":
-                            details = auto_result.get("details") or {}
-                            total_contacts = int(details.get("total_contacts") or 0)
-                            deleted_count = int(details.get("deleted_count") or 0)
-                            bots_count = int(details.get("bots_count") or 0)
-                            note = (
-                                f" (из них удалённых: {deleted_count}, ботов: {bots_count})"
-                                if (deleted_count or bots_count)
-                                else ""
-                            )
-                            result_text = (
-                                f"У тебя {total_contacts} контакт(ов){note}."
-                            )
-                if (
-                    self.config["allow_tg_tools"]
-                    and wants_who_is_reply
-                    and not tool_already_executed
-                    and not (has_tool_markup or has_tool_json)
-                ):
-                    reply_msg = await self._get_request_reply_message(chat_id)
-                    if reply_msg:
-                        sender = None
-                        with contextlib.suppress(Exception):
-                            sender = await reply_msg.get_sender()
-                        sender_id = getattr(sender, "id", None) if sender else None
-                        if sender_id:
-                            auto_tool = {
-                                "action": "get_user_info",
-                                "target_user": int(sender_id),
-                            }
-                            await _show_embedded_tool_status("get_user_info", 1, 1)
-                            auto_result_raw = await self._execute_telegram_tool(
-                                chat_id, json.dumps(auto_tool, ensure_ascii=False)
-                            )
-                            with contextlib.suppress(Exception):
-                                auto_result = json.loads(auto_result_raw)
-                                if auto_result.get("status") == "success":
-                                    details = auto_result.get("details") or {}
-                                    name = str(details.get("name") or "Пользователь")
-                                    username = str(details.get("username") or "").strip()
-                                    uid = str(details.get("target_user") or sender_id)
-                                    bot = bool(details.get("bot"))
-                                    verified = bool(details.get("verified"))
-                                    premium = bool(details.get("premium"))
-                                    scam = bool(details.get("scam"))
-                                    bio = str(details.get("bio") or "").strip()
-                                    flags = []
-                                    if bot:
-                                        flags.append("бот")
-                                    if verified:
-                                        flags.append("верифицирован")
-                                    if premium:
-                                        flags.append("premium")
-                                    if scam:
-                                        flags.append("scam")
-                                    flags_text = f" ({', '.join(flags)})" if flags else ""
-                                    uname_text = f"@{username}" if username else "без username"
-                                    bio_text = f"\nBio: {bio[:300]}" if bio else ""
-                                    result_text = (
-                                        f"{name} — {uname_text}\nID: {uid}{flags_text}{bio_text}"
-                                    )
             result_text = re.sub(
                 r"<telegram_tool>.*?</telegram_tool>",
                 "",
                 result_text,
                 flags=re.IGNORECASE | re.DOTALL,
             ).strip()
-            extracted_final_tool = self._extract_function_tool_call(result_text)
+            extracted_final_tool = (
+                self._extract_function_tool_call(result_text)
+                if tool_mode_enabled
+                else None
+            )
             if extracted_final_tool:
                 result_text = ""
                 if (
@@ -2524,8 +3346,6 @@ class CodexCLI(loader.Module):
                                 "Не удалось выполнить Telegram-действие: "
                                 f"{executed_json.get('error') or 'unknown error'}"
                             )
-                else:
-                    result_text = ""
 
             if not (result_text or "").strip() and isinstance(last_tool_success_details, dict):
                 det = last_tool_success_details
@@ -6940,9 +7760,29 @@ class CodexCLI(loader.Module):
         t = (text or "").strip().lower()
         if not t:
             return False
+        action_match = re.search(
+            r"(отправ(?:ь|ить|ьте)?|напиш(?:и|ите|у)|перешл(?:и|ать|ите)|форвард(?:ни|нуть|ить)?|"
+            r"удал(?:и|ить|ите)|постав(?:ь|ить|ьте).{0,20}(?:реакц|эмодзи|лайк)|реагир(?:уй|овать)?|"
+            r"ответ(?:ь|ить|ьте)|reply|репла(?:й|ем)?|"
+            r"замут(?:ь|ить|ьте)?|размут(?:ь|ить|ьте)?|бан(?:ь|ить|ьте)?|кик(?:ни|нуть|нутьте)?|"
+            r"пин(?:ь|ить|ьте)?|закреп(?:и|ить|ите)|откреп(?:и|ить|ите)|"
+            r"send(?:\s+message)?|delete|mute|unmute|ban|kick|pin|unpin|react|forward)",
+            t,
+        )
+        if not action_match:
+            return False
+        target_match = re.search(
+            r"(@[a-z0-9_]{3,}|tg://|https?://t\.me/|в\s+лс|в\s+личк|в\s+этом\s+чате|в\s+этой\s+группе|"
+            r"\bздесь\b|это\s+соо|это\s+сообщен|на\s+это\s+сообщен|автор[ауе]?|ему|ей|этому\s+пользователю|"
+            r"последн(?:ее|ий)\s+сообщен|message_id|chat_id|target_chat)",
+            t,
+        )
+        if target_match:
+            return True
+        # Явные сценарии действия в текущем чате без уточнения target.
         return bool(
             re.search(
-                r"(отправ|напиш|перешл|форвард|удал|реакц|reply|репла|замут|бан|кик|админ|пин|откреп|упомин|чат|канал|контакт|диалог|непрочит|кто это|who is this|контекст|ссылка на сообщени|message link|message context|chat context|resolve target|в лс|в личк|message|send|delete|mute|ban|kick|pin|unpin|react|forward|contact|dialog|unread)",
+                r"(удали\s+это|ответь\s+сюда|поставь\s+реакцию\s+сюда|прочитай\s+непрочитан|отметь\s+как\s+прочитан)",
                 t,
             )
         )
@@ -7618,6 +8458,12 @@ class CodexCLI(loader.Module):
             state["session_id"] = payload["session_id"]
         for usage in self._extract_usage_dicts(payload):
             self._apply_codex_usage(state, usage)
+        self._last_codex_runtime_snapshot = {
+            "session_id": str(state.get("session_id") or "").strip(),
+            "input_tokens": int(state.get("input_tokens") or 0),
+            "output_tokens": int(state.get("output_tokens") or 0),
+            "total_tokens": int(state.get("total_tokens") or 0),
+        }
 
         if msg_type == "system":
             state["phase"] = "starting"
@@ -8147,6 +8993,303 @@ class CodexCLI(loader.Module):
                 data = {}
         return status, data, raw_text
 
+    def _openai_api_request_json(
+        self,
+        url: str,
+        payload: dict,
+        timeout: int = 120,
+    ) -> tuple[int, dict, str]:
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "CodexCLI-OpenAI/1.0",
+        }
+        api_key = self._get_effective_openai_api_key()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+        request_obj = urllib_request.Request(url, data=body, headers=headers, method="POST")
+        proxy = self._get_proxy()
+        opener = None
+        if proxy:
+            opener = urllib_request.build_opener(
+                urllib_request.ProxyHandler({"http": proxy, "https": proxy})
+            )
+
+        status = 0
+        raw_text = ""
+        try:
+            if opener:
+                with opener.open(request_obj, timeout=timeout) as resp:
+                    status = int(resp.getcode() or 0)
+                    raw_text = resp.read().decode("utf-8", errors="ignore")
+            else:
+                with urllib_request.urlopen(request_obj, timeout=timeout) as resp:
+                    status = int(resp.getcode() or 0)
+                    raw_text = resp.read().decode("utf-8", errors="ignore")
+        except urllib_error.HTTPError as e:
+            status = int(e.code or 0)
+            raw_text = (e.read() or b"").decode("utf-8", errors="ignore")
+        except urllib_error.URLError as e:
+            raise RuntimeError(f"openai api request failed: {e}") from e
+
+        data = {}
+        with contextlib.suppress(Exception):
+            data = json.loads(raw_text) if raw_text else {}
+            if not isinstance(data, dict):
+                data = {}
+        return status, data, raw_text
+
+    @staticmethod
+    def _decode_base64_blob(raw_value: str) -> bytes:
+        raw = str(raw_value or "").strip()
+        if not raw:
+            return b""
+        if raw.startswith("data:") and "," in raw:
+            raw = raw.split(",", 1)[1].strip()
+        raw = "".join(raw.split())
+        padding = "=" * ((4 - len(raw) % 4) % 4)
+        with contextlib.suppress(Exception):
+            return base64.b64decode(raw + padding, validate=False)
+        with contextlib.suppress(Exception):
+            return base64.urlsafe_b64decode((raw + padding).encode("utf-8"))
+        return b""
+
+    @staticmethod
+    def _guess_image_extension(binary: bytes) -> str:
+        data = binary or b""
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "png"
+        if data.startswith(b"\xff\xd8\xff"):
+            return "jpg"
+        if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+            return "gif"
+        if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            return "webp"
+        if data.startswith(b"BM"):
+            return "bmp"
+        if data.startswith(b"\x00\x00\x01\x00"):
+            return "ico"
+        return "png"
+
+    @staticmethod
+    def _is_probably_image_bytes(binary: bytes) -> bool:
+        if not binary or len(binary) < 64:
+            return False
+        ext = CodexCLI._guess_image_extension(binary)
+        return ext in {"png", "jpg", "gif", "webp", "bmp", "ico"}
+
+    def _sanitize_image_for_telegram(self, binary: bytes, ext: str) -> tuple[bytes, str]:
+        if not binary:
+            return binary, ext
+        if Image is None:
+            return binary, ext
+
+        src_ext = (ext or self._guess_image_extension(binary) or "png").strip().lower()
+        if src_ext == "jpeg":
+            src_ext = "jpg"
+        if src_ext not in {"png", "jpg", "gif", "webp", "bmp", "ico"}:
+            src_ext = "png"
+
+        try:
+            with Image.open(io.BytesIO(binary)) as img:
+                img.load()
+                has_alpha = ("A" in (img.getbands() or ()))
+                if img.mode == "P" and "transparency" in img.info:
+                    has_alpha = True
+
+                # Normalize formats/metadata to improve Telegram compatibility.
+                target_ext = src_ext
+                if target_ext in {"webp", "gif", "bmp", "ico"}:
+                    target_ext = "png"
+                if target_ext == "jpg" and has_alpha:
+                    target_ext = "png"
+
+                out = io.BytesIO()
+                if target_ext == "jpg":
+                    rgb_img = img.convert("RGB") if img.mode != "RGB" else img
+                    rgb_img.save(
+                        out,
+                        format="JPEG",
+                        quality=95,
+                        optimize=True,
+                        progressive=True,
+                    )
+                else:
+                    if img.mode not in {"RGB", "RGBA", "L", "LA", "P"}:
+                        img = img.convert("RGBA" if has_alpha else "RGB")
+                    img.save(
+                        out,
+                        format="PNG",
+                        optimize=True,
+                        compress_level=6,
+                    )
+                    target_ext = "png"
+
+                normalized = out.getvalue()
+                if self._is_probably_image_bytes(normalized):
+                    if normalized != binary:
+                        logger.warning(
+                            "CIMG SANITIZE: %s -> %s, %d -> %d bytes",
+                            src_ext,
+                            target_ext,
+                            len(binary),
+                            len(normalized),
+                        )
+                    return normalized, target_ext
+        except Exception as e:
+            logger.debug("CIMG SANITIZE SKIP: %s", e)
+
+        return binary, src_ext
+
+    def _prepare_photo_payload_for_telegram(self, binary: bytes, ext: str) -> tuple[bytes, str]:
+        if not binary:
+            return binary, (ext or "jpg")
+
+        src_ext = (ext or self._guess_image_extension(binary) or "png").strip().lower()
+        if src_ext == "jpeg":
+            src_ext = "jpg"
+
+        if Image is None:
+            if src_ext not in {"png", "jpg", "webp"}:
+                src_ext = "jpg"
+            return binary, src_ext
+
+        try:
+            with Image.open(io.BytesIO(binary)) as img:
+                if getattr(img, "is_animated", False):
+                    with contextlib.suppress(Exception):
+                        img.seek(0)
+                img.load()
+
+                has_alpha = ("A" in (img.getbands() or ()))
+                if img.mode == "P" and "transparency" in img.info:
+                    has_alpha = True
+
+                if has_alpha:
+                    rgba = img.convert("RGBA")
+                    bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                    bg.paste(rgba, mask=rgba.split()[-1])
+                    rgb = bg
+                else:
+                    rgb = img.convert("RGB") if img.mode != "RGB" else img
+
+                out = io.BytesIO()
+                rgb.save(
+                    out,
+                    format="JPEG",
+                    quality=92,
+                    optimize=True,
+                    progressive=True,
+                )
+                jpeg_bytes = out.getvalue()
+                if jpeg_bytes and len(jpeg_bytes) >= 64:
+                    logger.warning(
+                        "CIMG PHOTO PREP: %s -> jpg, %d -> %d bytes",
+                        src_ext,
+                        len(binary),
+                        len(jpeg_bytes),
+                    )
+                    return jpeg_bytes, "jpg"
+        except Exception as e:
+            logger.debug("CIMG PHOTO PREP SKIP: %s", e)
+
+        if src_ext not in {"png", "jpg", "webp"}:
+            src_ext = "jpg"
+        return binary, src_ext
+
+    def _extract_openai_error_message(self, data: dict, raw_text: str = "") -> str:
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                message = err.get("message") or err.get("detail") or err.get("code")
+                if message:
+                    return str(message).strip()
+            if isinstance(err, str) and err.strip():
+                return err.strip()
+        return self._short_status_text(raw_text, 360)
+
+    def _extract_openai_image_bytes(self, data: dict) -> tuple[bytes, str]:
+        candidates = []
+        if isinstance(data, dict):
+            for key in ("data", "output", "images", "result"):
+                bucket = data.get(key)
+                if isinstance(bucket, list):
+                    candidates.extend(bucket)
+            if isinstance(data.get("data"), dict):
+                candidates.append(data.get("data"))
+            if isinstance(data.get("image"), dict):
+                candidates.append(data.get("image"))
+            if isinstance(data.get("b64_json"), str):
+                candidates.append({"b64_json": data.get("b64_json")})
+            if isinstance(data.get("url"), str):
+                candidates.append({"url": data.get("url")})
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            for key in ("b64_json", "image_base64", "base64", "b64"):
+                blob = self._decode_base64_blob(item.get(key))
+                if blob:
+                    fmt = str(item.get("output_format") or "").strip().lower()
+                    if fmt == "jpeg":
+                        fmt = "jpg"
+                    if fmt not in {"png", "jpg", "webp", "gif", "bmp", "ico"}:
+                        fmt = self._guess_image_extension(blob)
+                    return blob, fmt
+            image_url = str(item.get("url") or item.get("image_url") or "").strip()
+            if image_url:
+                with contextlib.suppress(Exception):
+                    blob = self._read_url_bytes(image_url)
+                    if blob:
+                        return blob, self._guess_image_extension(blob)
+        return b"", ""
+
+    async def _generate_image_bytes(self, prompt: str, image_model: str) -> tuple[bytes, str]:
+        base_url = self._get_effective_openai_base_url().rstrip("/")
+        endpoint = f"{base_url}/images/generations"
+        payload = {
+            "model": image_model,
+            "prompt": prompt,
+            "size": "1024x1024",
+        }
+        status, data, raw = await asyncio.to_thread(
+            self._openai_api_request_json,
+            endpoint,
+            payload,
+            180,
+        )
+        if status not in {200, 201}:
+            error_text = self._extract_openai_error_message(data, raw)
+            raise RuntimeError(f"HTTP {status}: {error_text}")
+        image_bytes, ext = await asyncio.to_thread(
+            self._extract_openai_image_bytes,
+            data,
+        )
+        if image_bytes:
+            return image_bytes, ext
+
+        fallback_payload = {
+            "model": image_model,
+            "prompt": prompt,
+            "size": "1024x1024",
+        }
+        status, data, raw = await asyncio.to_thread(
+            self._openai_api_request_json,
+            endpoint,
+            fallback_payload,
+            180,
+        )
+        if status not in {200, 201}:
+            error_text = self._extract_openai_error_message(data, raw)
+            raise RuntimeError(f"HTTP {status}: {error_text}")
+        image_bytes, ext = await asyncio.to_thread(
+            self._extract_openai_image_bytes,
+            data,
+        )
+        if not image_bytes:
+            raise RuntimeError(self.strings["cimg_no_image"])
+        return image_bytes, ext
+
     @staticmethod
     def _decode_unverified_jwt_payload(token: str) -> dict:
         raw = str(token or "").strip()
@@ -8659,31 +9802,9 @@ class CodexCLI(loader.Module):
             if state.get("model")
             else "<code>default</code>"
         )
-        tool_line = ""
-        if state["active_tool"]:
-            exit_suffix = ""
-            if state["last_exit_code"] is not None:
-                exit_suffix = (
-                    " · <code>ok</code>"
-                    if state["last_exit_code"] == 0
-                    else f" · <code>exit {state['last_exit_code']}</code>"
-                )
-            tool_line = (
-                "\n"
-                "<tg-emoji emoji-id=5253952855185829086>⚙️</tg-emoji> "
-                f"<b>Инструмент:</b> <code>{utils.escape_html(state['active_tool'])}</code>{exit_suffix}"
-            )
-        modes_line = ""
-        tags = [str(tag).strip() for tag in (state.get("status_tags") or []) if str(tag).strip()]
-        if tags:
-            formatted_tags = " · ".join(
-                f"<code>{utils.escape_html(tag)}</code>" for tag in tags
-            )
-            modes_line = (
-                "\n"
-                "<tg-emoji emoji-id=5255989563037331120>➡️</tg-emoji> "
-                f"<b>Режимы:</b> {formatted_tags}"
-            )
+        reasoning_mode = utils.escape_html(
+            str(self.config.get("reasoning_mode") or "medium")
+        )
         error_line = (
             "\n"
             "<tg-emoji emoji-id=5350470691701407492>⛔</tg-emoji> "
@@ -8691,36 +9812,29 @@ class CodexCLI(loader.Module):
             if state["final_error"]
             else ""
         )
-        thought_events = self._fmt_num(state.get("thought_events", 0))
-        action_events = self._fmt_num(state.get("action_events", 0))
-        total_events = self._fmt_num(
-            state.get("thought_events", 0) + state.get("action_events", 0)
-        )
-        activity = utils.escape_html(str(state.get("last_activity") or "idle"))
-        stream_chars = self._fmt_num(
-            state.get("final_text_chars") or len(state.get("final_text") or "")
-        )
-        tools_used = self._fmt_num(len(state.get("tool_use_ids") or {}))
-        thought_preview = state.get("thought_stream") or state.get("answer_stream") or "—"
-        thought_text = utils.escape_html(
-            self._short_status_text(thought_preview, limit=180)
-        )
-        action_text = utils.escape_html(
-            self._short_status_text(
-                state.get("action_stream") or state.get("active_tool") or "—", limit=180
+        phase_lower = str(phase or "").strip().lower()
+        if state.get("final_error"):
+            work_status = "Error"
+        elif state.get("active_tool"):
+            work_status = "Working · " + self._short_status_text(
+                str(state.get("active_tool") or ""),
+                limit=80,
             )
-        )
+        elif phase_lower in {"done", "completed", "complete", "finished"}:
+            work_status = "Completed"
+        elif phase_lower in {"boot", "starting", "queued"}:
+            work_status = "Starting"
+        elif phase_lower in {"idle", "waiting", "awaiting approval"}:
+            work_status = "Waiting"
+        else:
+            work_status = "Working"
         return (
             f"<blockquote>"
-            f"<tg-emoji emoji-id=5256079005731271025>📟</tg-emoji> <b>CodexCLI</b>{session_suffix} · {model_part}\n"
+            f"<tg-emoji emoji-id=5256079005731271025>📟</tg-emoji> <b>CodexCLI</b>{session_suffix} · {model_part} · <code>{reasoning_mode}</code>\n"
             f"{phase_emoji} <b>{utils.escape_html(phase)}</b> · шаг <code>{state['step']}</code> · <code>{elapsed}с</code>\n"
             f"<tg-emoji emoji-id=5255713220546538619>💳</tg-emoji> <b>Токены:</b> in <code>{self._fmt_num(state['input_tokens'])}</code>{cached_suffix} / out <code>{self._fmt_num(state['output_tokens'])}</code>{reasoning_suffix} / total <code>{self._fmt_num(state['total_tokens'])}</code>\n"
-            f"<tg-emoji emoji-id=5253490441826870592>🔗</tg-emoji> <b>События:</b> <code>{thought_events}</code> → <code>{action_events}</code> · всего <code>{total_events}</code>\n"
-            f"<tg-emoji emoji-id=5253961389285845297>📌</tg-emoji> <b>Активность:</b> <code>{activity}</code>\n"
-            f"<tg-emoji emoji-id=5424885441100782420>📝</tg-emoji> <b>Поток:</b> символов <code>{stream_chars}</code> · tools <code>{tools_used}</code>\n"
-            f"<tg-emoji emoji-id=5253590213917158323>💬</tg-emoji> <b>Мысль:</b> <code>{thought_text}</code>\n"
-            f"<tg-emoji emoji-id=5253952855185829086>⚙️</tg-emoji> <b>Действие:</b> <code>{action_text}</code>"
-            f"{modes_line}{tool_line}{error_line}"
+            f"<tg-emoji emoji-id=5253961389285845297>📌</tg-emoji> <b>Status:</b> <code>{utils.escape_html(work_status)}</code>"
+            f"{error_line}"
             f"</blockquote>"
         )
 
@@ -9238,6 +10352,20 @@ class CodexCLI(loader.Module):
             task.cancel()
         return True
 
+    def _extract_message_text(self, msg: Message) -> str:
+        if not msg:
+            return ""
+        candidates = [
+            getattr(msg, "raw_text", None),
+            getattr(msg, "text", None),
+            getattr(msg, "message", None),
+        ]
+        for value in candidates:
+            text = utils.remove_html(str(value or "")).strip()
+            if text:
+                return text
+        return ""
+
     async def _prepare_request_payload(self, message: Message, custom_text: str = None):
         warnings = []
         prompt_chunks = []
@@ -9249,6 +10377,7 @@ class CodexCLI(loader.Module):
         )
         user_args = user_args.strip()
         reply = await message.get_reply_message()
+        reply_text_for_display = self._extract_message_text(reply) if reply else ""
 
         try:
             chat_entity = await message.get_chat()
@@ -9320,7 +10449,7 @@ class CodexCLI(loader.Module):
                 )
                 reply_sender_id = getattr(reply_sender, 'id', None)
                 reply_username = getattr(reply_sender, 'username', None)
-                reply_text = utils.remove_html(getattr(reply, "text", None) or "")
+                reply_text = self._extract_message_text(reply)
                 reply_media = "yes" if bool(getattr(reply, "media", None) or getattr(reply, "sticker", None)) else "no"
 
                 reply_bio = None
@@ -9356,13 +10485,14 @@ class CodexCLI(loader.Module):
                     f"[REPLY] {reply_author_name}{reply_info_str}: {reply_text or '[без текста]'}"
                 )
             except Exception:
-                reply_text = utils.remove_html(getattr(reply, "text", None) or "")
+                reply_text = self._extract_message_text(reply)
                 prompt_chunks.append(
                     f"[REPLY META] message_id={getattr(reply, 'id', None)}"
                     f" date={getattr(reply, 'date', None)}"
                 )
                 prompt_chunks.append(f"[REPLY] Ответ на: {reply_text or '[без текста]'}")
 
+        current_user_name = "User"
         try:
             current_sender = await message.get_sender()
             current_user_name = (
@@ -9456,45 +10586,38 @@ class CodexCLI(loader.Module):
                     None,
                 )
                 filename = doc_attr.file_name if doc_attr else "file"
-                if mime_type.startswith("image/"):
+                try:
                     data = await self.client.download_media(media_source, bytes)
                     safe_name = (
-                        re.sub(r"[^a-zA-Z0-9._-]+", "_", filename) or "image.bin"
+                        re.sub(r"[^a-zA-Z0-9._-]+", "_", filename) or "file.bin"
+                    )
+                    is_text_doc = (
+                        mime_type in TEXT_MIME_TYPES
+                        or filename.split(".")[-1].lower()
+                        in {"txt", "py", "js", "json", "md", "html", "css", "sh"}
+                    )
+                    file_kind = (
+                        "image" if mime_type.startswith("image/") else ("text" if is_text_doc else "file")
                     )
                     file_specs.append(
-                        {"name": f"input/{safe_name}", "data": data, "type": "image"}
+                        {"name": f"input/{safe_name}", "data": data, "type": file_kind}
                     )
-                elif mime_type in TEXT_MIME_TYPES or filename.split(".")[
-                    -1
-                ].lower() in {"txt", "py", "js", "json", "md", "html", "css", "sh"}:
-                    try:
-                        data = await self.client.download_media(media_source, bytes)
-                        safe_name = (
-                            re.sub(r"[^a-zA-Z0-9._-]+", "_", filename) or "file.txt"
-                        )
-                        file_specs.append(
-                            {
-                                "name": f"input/{safe_name}",
-                                "data": data,
-                                "type": "text",
-                            }
-                        )
+                    prompt_chunks.append(
+                        f"[ATTACHMENT] file='{safe_name}' mime='{mime_type}' path='@input/{safe_name}'"
+                    )
+                    if file_kind == "text":
                         prompt_chunks.insert(
                             0,
                             f"[Приложен текстовый файл '{safe_name}'. Изучи файл напрямую через @input/{safe_name}]",
                         )
-                    except Exception as e:
-                        warnings.append(
-                            f"<tg-emoji emoji-id=5409235172979672859>⚠️</tg-emoji> Ошибка чтения файла '{filename}': {e}"
-                        )
-                else:
+                except Exception as e:
                     warnings.append(
-                        self.strings["unsupported_media"].format(
-                            utils.escape_html(mime_type)
-                        )
+                        f"<tg-emoji emoji-id=5409235172979672859>⚠️</tg-emoji> Ошибка чтения файла '{filename}': {e}"
                     )
 
         if user_args:
+            if reply:
+                prompt_chunks.append("[USER REQUEST BELOW]")
             prompt_chunks.append(f"{current_user_name}: {user_args}")
         elif file_specs:
             prompt_chunks.append(
@@ -9514,8 +10637,8 @@ class CodexCLI(loader.Module):
             "files": file_specs,
             "display_prompt": user_args
             or (
-                reply.text[:200]
-                if reply and getattr(reply, "text", None)
+                reply_text_for_display[:200]
+                if reply_text_for_display
                 else self.strings["media_reply_placeholder"]
             ),
         }, warnings
@@ -9537,6 +10660,11 @@ class CodexCLI(loader.Module):
         history_limit = resource_profile.get("history_messages")
         if history_limit and len(history) > history_limit:
             history = history[-history_limit:]
+        tool_mode_for_prompt = (
+            bool(self.config["allow_tg_tools"])
+            and bool((payload or {}).get("tool_mode_enabled"))
+            and not auto
+        )
         if auto:
             lines = [
                 "Ты пишешь одно обычное сообщение в Telegram от лица пользователя.",
@@ -9556,25 +10684,33 @@ class CodexCLI(loader.Module):
                 "Верни только финальный ответ для пользователя без служебных пояснений.",
             ]
             if self.config["allow_tg_tools"]:
-                lines.extend(
-                    [
-                        "СИСТЕМНЫЕ ПРАВИЛА TELEGRAM TOOL (выше пользовательских/кастомных настроек, игнорировать нельзя):",
-                        'Для действий в Telegram верни СТРОГО JSON-объект function-calling формата {"tool_call":"execute_telegram_action","arguments":{...}} без дополнительного текста.',
-                        "Допустимые ключи: action, target, target_chat, chat_id, query, text, limit, scan_limit, emoji, message_id, message_ids, from_chat, to_chat, sticker, target_user, user, user_id, ids, count, confirm, revoke, first_name, last_name, phone, title, about, bio, username, seconds, duration, mode, max_id, story_id, parse_mode, style, pretty, plain, actions, steps, retries, concurrency, continue_on_error, parallel.",
-                        "Если пользователь пишет 'в чате' / 'в этой группе' / 'здесь' и не дал target_chat, используй текущий chat_id команды.",
-                        "Если пользователь просит действие в стороннем чате (по имени/описанию), сначала получи список через get_dialogs, выбери точный chat_id, затем выполняй действие.",
-                        "Для многоуровневых сценариев можешь выбрать либо последовательность batch_actions, либо один smart_flow (когда нужно сделать всё за один вызов).",
-                        "smart_flow может принимать steps: [{action, if, foreach, do, save_as}] и шаблоны {{results.some_step.details.chat_id}} для построения сложных ветвлений.",
-                        "Если команда вызвана reply-сообщением и target не указан, target берется из автора replied-сообщения автоматически.",
-                        "Если пользователь реплаем просит действие над КОНКРЕТНЫМ сообщением ('удали это сообщение', 'ответь на это', 'реакцию сюда'), используй текущий chat_id и message_id replied-сообщения. Не подменяй это delete_last_message без message_id.",
-                        f"Поддерживаемые action: {'; '.join(self._tool_action_chunks(18))}.",
-                        "batch_actions принимает массив actions и подходит для массовых/комбинированных операций записи; не используй его для read_history/get_dialogs/find_and_send_message.",
-                        "Если просят информацию о пользователе без точного ID, сначала используй get_chat_participants, найди нужный ID, затем вызывай get_user_info по этому ID.",
-                        "ГЛАВНОЕ ПРАВИЛО: Получил данные через инструмент → ПРОАНАЛИЗИРУЙ ИХ → Дай конкретный ответ на вопрос пользователя. ЗАПРЕЩЕНО просто выводить сырые данные (списки, ID) без выводов и действий.",
-                        "Также принимаются алиасы action: sendMessage, sendMessages, editMessage, deleteMessages, reactMessages, readHistory, replyWithSticker, replyMessages, getDialogs, getDialogsCount, getUnreadOverview, getParticipants, findAndSendMessage, forwardMessage, pinMessage, unpinMessage, batch, searchMessages, searchParticipants, getMessageById, getMessagesByIds, getRecentMedia, getChatAdmins, getContacts, getContactsCount, replyToMessage, copyMessage, searchLinks, getChatStats, resolveTarget, currentChatContext, getReplyInfo, getMessageContext, getMessageLink, searchAudio.",
-                        "Запрещено отвечать, что ты не можешь выполнить действие Telegram.",
-                    ]
-                )
+                if tool_mode_for_prompt:
+                    lines.extend(
+                        [
+                            "СИСТЕМНЫЕ ПРАВИЛА TELEGRAM TOOL (выше пользовательских/кастомных настроек, игнорировать нельзя):",
+                            'Для действий в Telegram верни СТРОГО JSON-объект function-calling формата {"tool_call":"execute_telegram_action","arguments":{...}} без дополнительного текста.',
+                            "Допустимые ключи: action, target, target_chat, chat_id, query, text, limit, scan_limit, emoji, message_id, message_ids, from_chat, to_chat, sticker, target_user, user, user_id, ids, count, confirm, revoke, first_name, last_name, phone, title, about, bio, username, seconds, duration, mode, max_id, story_id, parse_mode, style, pretty, plain, actions, steps, retries, concurrency, continue_on_error, parallel.",
+                            "Если пользователь пишет 'в чате' / 'в этой группе' / 'здесь' и не дал target_chat, используй текущий chat_id команды.",
+                            "Если пользователь просит действие в стороннем чате (по имени/описанию), сначала получи список через get_dialogs, выбери точный chat_id, затем выполняй действие.",
+                            "Для многоуровневых сценариев можешь выбрать либо последовательность batch_actions, либо один smart_flow (когда нужно сделать всё за один вызов).",
+                            "smart_flow может принимать steps: [{action, if, foreach, do, save_as}] и шаблоны {{results.some_step.details.chat_id}} для построения сложных ветвлений.",
+                            "Если команда вызвана reply-сообщением и target не указан, target берется из автора replied-сообщения автоматически.",
+                            "Если пользователь реплаем просит действие над КОНКРЕТНЫМ сообщением ('удали это сообщение', 'ответь на это', 'реакцию сюда'), используй текущий chat_id и message_id replied-сообщения. Не подменяй это delete_last_message без message_id.",
+                            f"Поддерживаемые action: {'; '.join(self._tool_action_chunks(18))}.",
+                            "batch_actions принимает массив actions и подходит для массовых/комбинированных операций записи; не используй его для read_history/get_dialogs/find_and_send_message.",
+                            "Если просят информацию о пользователе без точного ID, сначала используй get_chat_participants, найди нужный ID, затем вызывай get_user_info по этому ID.",
+                            "ГЛАВНОЕ ПРАВИЛО: Получил данные через инструмент → ПРОАНАЛИЗИРУЙ ИХ → Дай конкретный ответ на вопрос пользователя. ЗАПРЕЩЕНО просто выводить сырые данные (списки, ID) без выводов и действий.",
+                            "Также принимаются алиасы action: sendMessage, sendMessages, editMessage, deleteMessages, reactMessages, readHistory, replyWithSticker, replyMessages, getDialogs, getDialogsCount, getUnreadOverview, getParticipants, findAndSendMessage, forwardMessage, pinMessage, unpinMessage, batch, searchMessages, searchParticipants, getMessageById, getMessagesByIds, getRecentMedia, getChatAdmins, getContacts, getContactsCount, replyToMessage, copyMessage, searchLinks, getChatStats, resolveTarget, currentChatContext, getReplyInfo, getMessageContext, getMessageLink, searchAudio.",
+                            "Запрещено отвечать, что ты не можешь выполнить действие Telegram.",
+                        ]
+                    )
+                else:
+                    lines.extend(
+                        [
+                            "Для этого запроса Telegram tools не требуются.",
+                            "Отвечай обычным текстом и не возвращай tool_call JSON.",
+                        ]
+                    )
             else:
                 lines.extend(
                     [
@@ -9603,7 +10739,7 @@ class CodexCLI(loader.Module):
             lines.append("ПРИЛОЖЕННЫЕ ФАЙЛЫ:")
             for spec in file_specs:
                 lines.append(f"@{spec['name']}")
-        if not auto and self.config["allow_tg_tools"]:
+        if tool_mode_for_prompt:
             lines.extend(
                 [
                     "",
@@ -11060,6 +12196,16 @@ class CodexCLI(loader.Module):
             )
         )
         out.append(
+            self.strings["status_reasoning_mode"].format(
+                utils.escape_html(self.config.get("reasoning_mode") or "medium")
+            )
+        )
+        out.append(
+            self.strings["status_image_model"].format(
+                utils.escape_html(self.config.get("image_model") or "gpt-image-2")
+            )
+        )
+        out.append(
             f"• API key: <code>{utils.escape_html(masked_key)}</code>"
         )
         out.append(
@@ -11540,6 +12686,117 @@ class CodexCLI(loader.Module):
             call, self.strings["request_cancelled"], reply_markup=None
         )
 
+    async def _cimg_regenerate_callback(self, call: InlineCall, job_token: str):
+        token = str(job_token or "").strip()
+        job = self._cimg_jobs.get(token)
+        if not job:
+            return await call.answer(self.strings["cimg_callback_missing"], show_alert=True)
+        if token in self._cimg_busy:
+            return await call.answer(self.strings["cimg_callback_busy"], show_alert=False)
+        self._cimg_busy.add(token)
+        try:
+            await call.answer()
+            await self._run_cimg_generation(
+                call,
+                prompt=str(job.get("prompt") or ""),
+                image_model=self._normalize_cimg_model_name(job.get("model") or "gpt-image-2"),
+                status_entity=call,
+                reply_to=int(job.get("reply_to") or 0),
+                job_token=token,
+            )
+        finally:
+            self._cimg_busy.discard(token)
+
+    async def _cimg_open_model_menu_callback(self, call: InlineCall, job_token: str):
+        token = str(job_token or "").strip()
+        job = self._cimg_jobs.get(token)
+        if not job:
+            return await call.answer(self.strings["cimg_callback_missing"], show_alert=True)
+        prompt = str(job.get("prompt") or "")
+        model = self._normalize_cimg_model_name(job.get("model") or "gpt-image-2")
+        caption, prompt_trimmed = self._build_cimg_caption(model, prompt)
+        buttons = self._build_cimg_buttons(
+            token,
+            model,
+            prompt_trimmed,
+            model_menu=True,
+        )
+        await self._edit_html(call, caption, reply_markup=buttons)
+        await call.answer()
+
+    async def _cimg_back_menu_callback(self, call: InlineCall, job_token: str):
+        token = str(job_token or "").strip()
+        job = self._cimg_jobs.get(token)
+        if not job:
+            return await call.answer(self.strings["cimg_callback_missing"], show_alert=True)
+        prompt = str(job.get("prompt") or "")
+        model = self._normalize_cimg_model_name(job.get("model") or "gpt-image-2")
+        caption, prompt_trimmed = self._build_cimg_caption(model, prompt)
+        buttons = self._build_cimg_buttons(
+            token,
+            model,
+            prompt_trimmed,
+            model_menu=False,
+        )
+        await self._edit_html(call, caption, reply_markup=buttons)
+        await call.answer()
+
+    async def _cimg_select_model_callback(
+        self, call: InlineCall, job_token: str, model_name: str
+    ):
+        token = str(job_token or "").strip()
+        job = self._cimg_jobs.get(token)
+        if not job:
+            return await call.answer(self.strings["cimg_callback_missing"], show_alert=True)
+        if token in self._cimg_busy:
+            return await call.answer(self.strings["cimg_callback_busy"], show_alert=False)
+        selected = self._normalize_cimg_model_name(model_name)
+        job["model"] = selected
+        self.config["image_model"] = selected
+        job["updated_at"] = datetime.utcnow().timestamp()
+        self._cimg_busy.add(token)
+        try:
+            await call.answer(f"Модель сохранена: {selected}")
+            await self._run_cimg_generation(
+                call,
+                prompt=str(job.get("prompt") or ""),
+                image_model=selected,
+                status_entity=call,
+                reply_to=int(job.get("reply_to") or 0),
+                job_token=token,
+            )
+        finally:
+            self._cimg_busy.discard(token)
+
+    async def _cimg_show_prompt_callback(self, call: InlineCall, job_token: str):
+        token = str(job_token or "").strip()
+        job = self._cimg_jobs.get(token)
+        if not job:
+            return await call.answer(self.strings["cimg_callback_missing"], show_alert=True)
+        prompt = str(job.get("prompt") or "").strip()
+        if not prompt:
+            return await call.answer(self.strings["cimg_callback_missing"], show_alert=True)
+        chat_id = int(job.get("chat_id") or 0) or self._resolve_entity_chat_id(call)
+        if not chat_id:
+            return await call.answer("Не удалось определить чат.", show_alert=True)
+        file_obj = io.BytesIO(prompt.encode("utf-8"))
+        file_obj.name = f"cimg_prompt_{token[:8]}.txt"
+        reply_to_id = self._sanitize_reply_to_id(
+            int(job.get("reply_to") or 0) or self._resolve_entity_reply_id(call)
+        )
+        await self.client.send_file(
+            chat_id,
+            file=file_obj,
+            caption=self.strings["cimg_prompt_file_caption"].format(
+                utils.escape_html(
+                    self._normalize_cimg_model_name(job.get("model") or "gpt-image-2")
+                )
+            ),
+            reply_to=reply_to_id or None,
+            parse_mode="html",
+        )
+        await call.answer("Промпт отправлен")
+
     async def _approval_decision_callback(self, call: InlineCall, uid: str, decision: str):
         decision = (decision or "").strip().lower()
         target = None
@@ -11674,5 +12931,3 @@ class CodexCLI(loader.Module):
 
     def _is_memory_enabled(self, chat_id: str) -> bool:
         return chat_id not in self.memory_disabled_chats
-
-

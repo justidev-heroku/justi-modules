@@ -4,76 +4,91 @@
 
 ![CodexCLI Banner](https://raw.githubusercontent.com/sepiol026-wq/GoyModules/refs/heads/main/assets/CodexCLI.png)
 
-**CodexCLI** — модуль для [Heroku](https://github.com/coddrago/Heroku), интегрирующий OpenAI Codex CLI прямо в Telegram. Поддерживает авторизацию через ChatGPT OAuth, стриминг ответов в реальном времени и выполнение Telegram-действий.  
-**Forked of [QwenCLI](https://github.com/sepiol026-wq/GoyModules/blob/main/QwenCLI.py)**
+**CodexCLI** — модуль для [Heroku](https://github.com/coddrago/Heroku), который интегрирует OpenAI Codex CLI прямо в Telegram.
+
+Актуальная ветка: **v1.4.0**.
 
 ---
 
-## Установка модуля
+## Установка
 
-```
+```bash
 .dlm https://raw.githubusercontent.com/justidev-heroku/justi-modules/main/modules/CodexCLI.py
 ```
 
-или через репозиторий:
+или:
 
-```
+```bash
 .addrepo https://github.com/justidev-heroku/justi-modules/modules
 ```
 
 ---
 
-## Требования
+## Основные возможности
 
-- [Heroku](https://github.com/coddrago/Heroku)
-- OpenAI API ключ / ChatGPT аккаунт
-- Установленный `codex` CLI на хосте
-
-> Если `codex CLI` не установлен на хосте — используй `.cdxinstall` для автоматической установки локального Runtime.
+- Codex CLI внутри Telegram (`.cdx` + slash-алиасы вроде `/status` через `.cdx /status`)
+- Streaming-статус выполнения с обновлённым UI
+- Поддержка `reasoning_mode`: `low | medium | high | xhigh`
+- Генерация изображений через `.cimg` (`gpt-image-1` / `gpt-image-2`)
+- Inline-контролы для `.cimg`: перегенерация, меню выбора модели, показ полного промпта
 
 ---
 
-## Установка Runtime
+## Команды
 
 | Команда | Описание |
-|---------|----------|
-| `.cdxinstall` | Автоматически установить локальный Runtime Codex CLI |
+|---|---|
+| `.cdx <запрос>` | Отправить запрос в Codex |
+| `.cdxpatch <правка>` | Дополнить/исправить предыдущий запрос |
+| `.cdxstop` | Остановить активный запрос |
+| `.cdxclear` | Очистить память текущего чата |
+| `.cdxreset` | Полная очистка памяти |
+| `.cdxmodel [name]` | Показать/сменить модель Codex |
+| `.cdxprompt <text>` | Установить системный промпт |
+| `.cimg <prompt>` | Сгенерировать изображение |
+
+---
+
+## `.cimg` UI (v1.4.0)
+
+После генерации доступны inline-кнопки:
+
+- `🔄 Перегенерировать`
+- `🎛 Выбрать модель` → подменю с `1️⃣ gpt-image-1` и `2️⃣ gpt-image-2`
+- `◀️ Назад` (возврат из меню выбора модели)
+- `📄 Показать промпт` (если промпт длиннее 512 символов)
+
+Поведение длинного промпта:
+
+- в подписи показываются первые 512 символов;
+- полный промпт отправляется `.txt` по кнопке `Показать промпт`.
+
+Выбор модели в кнопках сохраняется в `cfg image_model` как новый дефолт.
 
 ---
 
 ## Авторизация
 
 | Команда | Описание |
-|---------|----------|
-| `.cdxauth status` | Показать текущий статус авторизации |
-| `.cdxauth auth` | Войти через ChatGPT OAuth (device flow) |
-| `.cdxauth easy` | Автоматический вход с fallback на API key |
-| `.cdxauth apikey <key>` | Задать OpenAI API ключ |
-| `.cdxauth clear` | Сбросить все данные авторизации |
+|---|---|
+| `.cdxauth status` | Проверить статус авторизации |
+| `.cdxauth auth` | Device login через ChatGPT |
+| `.cdxauth apikey <key>` | Сохранить API ключ |
+| `.cdxauth codex` | Привязать codex-login через API key |
+| `.cdxauth clear` | Очистить auth-данные |
 
 ---
 
-## Основные команды
-
-| Команда | Описание |
-|---------|----------|
-| `.cdx <запрос>` | Отправить запрос в Codex |
-| `.cdxpatch <правка>` | Уточнить или дополнить предыдущий запрос |
-| `.cdxstop` | Остановить текущий запрос |
-| `.cdxclear` | Очистить историю диалога в чате |
-| `.cdxmodel [модель]` | Показать или сменить модель |
-| `.cdxprompt <текст>` | Установить системный промпт |
-
----
-
-## Конфигурация
+## Конфигурация (ключевое)
 
 | Параметр | Описание |
-|----------|----------|
-| `codex_model` | Модель (например `gpt-5.3-codex`, `gpt-5.4`) |
-| `approval_mode` | Режим подтверждений: `yolo`, `plan`, `auto-edit`, `default` |
-| `system_instruction` | Системный промпт по умолчанию |
-| `openai_base_url` | Кастомный API endpoint (оставь пустым при ChatGPT OAuth) |
+|---|---|
+| `codex_model` | Модель Codex (например `gpt-5.3-codex`) |
+| `reasoning_mode` | Режим reasoning: `low/medium/high/xhigh` |
+| `image_model` | Дефолт-модель для `.cimg` |
+| `approval_mode` | Режим подтверждений (`default/plan/auto-edit/yolo`) |
+| `openai_api_key` | API key |
+| `openai_base_url` | Базовый URL OpenAI-совместимого API |
 
 ---
 
