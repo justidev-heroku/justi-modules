@@ -150,6 +150,41 @@ def tint_image(img: Image.Image, hex_color: str) -> Image.Image:
     return Image.merge("RGBA", (rn, gn, bn, ao))
 
 
+def create_gradient_image(width: int, height: int, colors_hex: list, direction: str) -> Image.Image:
+    rgbs = [hex_to_rgb(c) for c in colors_hex]
+    if direction == "h":
+        grad = Image.new("RGB", (len(rgbs), 1))
+        grad.putdata(rgbs)
+        return grad.resize((width, height), Image.BILINEAR)
+    elif direction == "v":
+        grad = Image.new("RGB", (1, len(rgbs)))
+        grad.putdata(rgbs)
+        return grad.resize((width, height), Image.BILINEAR)
+    else:
+        size = int(max(width, height) * 1.5)
+        grad = Image.new("RGB", (1, len(rgbs)))
+        grad.putdata(rgbs)
+        grad_square = grad.resize((size, size), Image.BILINEAR)
+        angle = 45 if direction in ("d", "dl") else -45
+        rotated = grad_square.rotate(angle, resample=Image.BILINEAR, expand=False)
+        left = (size - width) // 2
+        top = (size - height) // 2
+        return rotated.crop((left, top, left + width, top + height))
+
+
+def tint_image_gradient(img: Image.Image, colors_hex: list, direction: str) -> Image.Image:
+    from PIL import ImageChops
+    img = img.convert("RGBA")
+    w, h = img.size
+    _, _, _, ao = img.split()
+    gray = img.convert("L")
+    grad_img = create_gradient_image(w, h, colors_hex, direction)
+    gray_rgb = Image.merge("RGB", (gray, gray, gray))
+    tinted_rgb = ImageChops.multiply(grad_img, gray_rgb)
+    tr, tg, tb = tinted_rgb.split()
+    return Image.merge("RGBA", (tr, tg, tb, ao))
+
+
 # ─── Lottie gradient ──────────────────────────────────────────────────────────
 
 def _sample_gradient(t: float, colors_hex: list) -> Tuple[float, float, float]:
@@ -1101,10 +1136,10 @@ def _recolor_document_gradient_sync(data: bytes, mime: str, gradient: dict, is_e
         apply_gradient_lottie(lottie,gradient)
         buf=io.BytesIO(compress_tgs(lottie)); buf.name="sticker.tgs"
     else:
-        mid = gradient["colors"][len(gradient["colors"])//2]
         sz=100 if is_emoji else 512
         img=Image.open(io.BytesIO(data)).convert("RGBA").resize((sz,sz),Image.LANCZOS)
-        buf=io.BytesIO(); tint_image(img,mid).save(buf,format="WEBP",lossless=True)
+        buf=io.BytesIO()
+        tint_image_gradient(img, gradient["colors"], gradient.get("dir", "d")).save(buf,format="WEBP",lossless=True)
         buf.seek(0); buf.name="sticker.webp"
     buf.seek(0)
     return buf
@@ -1873,7 +1908,9 @@ class JellyColorMod(loader.Module):
             else:
                 def _process_img():
                     img=Image.open(io.BytesIO(raw)).convert("RGBA").resize((512,512),Image.LANCZOS)
-                    if color:
+                    if gradient:
+                        img=tint_image_gradient(img, gradient["colors"], gradient.get("dir", "d"))
+                    elif color and not color.startswith("grad:"):
                         img=tint_image(img,color)
                     buf=io.BytesIO()
                     img.save(buf,format="WEBP",lossless=True)
