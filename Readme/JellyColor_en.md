@@ -18,13 +18,12 @@ Current version: **v3.5.0**.
 
 ## Features
 
-- **Telegram WebApp Integration**: A visual, interactive color and gradient constructor with live custom text/sticker preview.
 - **Fully Asynchronous**: Resource-heavy tasks (decompression, image processing, Lottie compression) run in background threads to keep the userbot interface non-blocking.
 - **Direct Chat Preview**: Template previews are sent directly to the active chat instead of Saved Messages, and deleted automatically once confirmed.
 - **Automatic Fallback (Append)**: If you attempt to create a stickerpack with a short_name you already own, new stickers are added to the existing pack.
 - Recolor static (WEBP) and animated (TGS) stickers/emojis into single solid colors or gradients.
 - Interactive inline constructor `.jt` for generating stickers/emojis from text templates.
-- Color choice: presets, WebApp constructor, manual HEX code, or custom gradient configurations.
+- Color choice: 8 built-in presets, custom HEX entry, or gradient configurations.
 - Support for uploading and managing custom fonts (`.ttf`, `.otf`) stored persistently.
 
 ---

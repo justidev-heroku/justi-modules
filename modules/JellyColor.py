@@ -1345,8 +1345,8 @@ class JellyColorMod(loader.Module):
                       "callback": back_cb, "args": (uid,)}])
         return rows
 
-    def _color_rows_with_gradient(self, uid, col_cb, hex_cb, grad_open_cb, no_color_cb=None, custom_grad_cb=None, webapp_cb=None):
-        """Генерирует строки кнопок выбора цвета: пресеты 2-в-ряд + WebApp + HEX + градиент + без перекраски + свой градиент."""
+    def _color_rows_with_gradient(self, uid, col_cb, hex_cb, grad_open_cb, no_color_cb=None, custom_grad_cb=None):
+        """Генерирует строки кнопок выбора цвета: пресеты 2-в-ряд + HEX + градиент + без перекраски + свой градиент."""
         rows = []; row = []
         for label, hv in PRESET_COLORS.items():
             row.append({"text": label, "callback": col_cb, "args": (uid, hv)})
@@ -1354,9 +1354,6 @@ class JellyColorMod(loader.Module):
                 rows.append(row); row = []
         if row:
             rows.append(row)
-        if webapp_cb:
-            rows.append([{"text": "✨ WebApp Конструктор", "icon_custom_emoji_id": PE["link"],
-                          "callback": webapp_cb, "args": (uid,)}])
         rows.append([{"text": "✏️ Свой HEX", "icon_custom_emoji_id": PE["palette"],
                       "input": "Введите HEX, например #FF3B30", "handler": hex_cb, "args": (uid,)}])
         grad_row = [{"text": "🎨 Градиент", "icon_custom_emoji_id": PE["stats"],
@@ -1400,10 +1397,6 @@ class JellyColorMod(loader.Module):
             sc="один" if s["scope"]=="one" else f"весь пак ({s['pack_count']})"
             return pe("🖋",PE["palette"])+f" <b>Цвет</b> — {sc}{hs}"
         if step=="gradient_menu": return self._gradient_menu_text()
-        if step=="webapp_wait":
-            return (pe("✨", PE["link"]) + " <b>Конструктор цветов запущен!</b>\n\n"
-                    "Откройте WebApp по кнопке ниже, настройте цвет или градиент в интерактивном режиме и нажмите <b>Применить</b>.\n\n"
-                    "<i>Ожидаем выбора цвета...</i>")
         if step=="title":
             g=s.get("gradient")
             label=g["name"] if g else f"<code>{s['color'] or 'без перекраски'}</code>"
@@ -1423,13 +1416,7 @@ class JellyColorMod(loader.Module):
                 return self._gradient_menu_markup(self._j_grad,uid,self._j_back_col)
             return self._color_rows_with_gradient(uid,self._j_col,self._j_hex,self._j_open_grad,
                                                   no_color_cb=self._j_no_color,
-                                                  custom_grad_cb=self._j_custom_grad,
-                                                  webapp_cb=self._j_open_webapp)
-        if step=="webapp_wait":
-            return [
-                [{"text": "✨ Открыть WebApp", "icon_custom_emoji_id": PE["link"], "url": s["webapp_url"]}],
-                [{"text": "◁ Назад", "icon_custom_emoji_id": PE["palette"], "callback": self._j_back_webapp, "args": (uid,)}]
-            ]
+                                                  custom_grad_cb=self._j_custom_grad)
         if step=="title": return [[{"text":"Ввести название","icon_custom_emoji_id":PE["sticker"],
                                     "input":"Например: My Cool Pack","handler":self._j_title,"args":(uid,)}]]
         if step=="name": return [[{"text":"Ввести short_name","icon_custom_emoji_id":PE["palette"],
@@ -1503,30 +1490,6 @@ class JellyColorMod(loader.Module):
         s["gradient"]=g; s["color"]="grad:✏️ Свой"; s["step"]="title"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
-    async def _j_open_webapp(self, call, uid):
-        s = self._sessions.get(uid)
-        if not s: await call.answer("Сессия устарела.", show_alert=True); return
-        import uuid
-        session_id = uuid.uuid4().hex
-        s["webapp_session"] = session_id
-        s["step"] = "webapp_wait"
-        text = "Aa"
-        if s.get("doc"):
-            for a in s["doc"].attributes:
-                if isinstance(a, (DocumentAttributeCustomEmoji, DocumentAttributeSticker)):
-                    text = getattr(a, "alt", "Aa") or "Aa"
-                    break
-        base_url = "https://raw.githack.com/justidev-heroku/justi-modules/main/assets/jelly_webapp.html"
-        webapp_url = f"{base_url}?session={session_id}&text={text}&type=sticker"
-        s["webapp_url"] = webapp_url
-        await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
-        asyncio.ensure_future(self._poll_webapp(call, uid, session_id, "j"))
-
-    async def _j_back_webapp(self, call, uid):
-        s = self._sessions.get(uid)
-        if not s: await call.answer("Сессия устарела.", show_alert=True); return
-        s["step"] = "color"
-        await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
 
     async def _j_title(self,call,value,uid):
         s=self._sessions.get(uid)
@@ -1688,10 +1651,6 @@ class JellyColorMod(loader.Module):
             hist=self._color_history()
             hs=("\n"+pe("⏰",PE["clock"])+" Последние: "+"  ".join(f"<code>{c}</code>" for c in hist)) if hist else ""
             return pe("🎨",PE["palette"])+f" <b>Цвет эмодзи</b>\n\nТекст: <code>{s['text']}</code>{hs}"
-        if step=="webapp_wait":
-            return (pe("✨", PE["link"]) + " <b>Конструктор цветов запущен!</b>\n\n"
-                    "Откройте WebApp по кнопке ниже, настройте цвет или градиент в интерактивном режиме и нажмите <b>Применить</b>.\n\n"
-                    "<i>Ожидаем выбора цвета...</i>")
         if step=="title": return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nТекст: <code>{s['text']}</code>" + (f"  Цвет: <code>{s['color']}</code>" if s.get('color') else "  (без перекраски)") + "\n\n<i>Введите отображаемое название (любые символы)</i>"
         if step=="name": return pe("🏷",PE["sticker"])+f" <b>short_name пака</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите short_name — только a-z, 0-9, _</i>"
         return pe("⏰",PE["clock"])+" <b>Создаём...</b>"
@@ -1715,14 +1674,8 @@ class JellyColorMod(loader.Module):
         if step=="color":
             rows=self._color_rows_with_gradient(uid,self._jt_col,self._jt_hex,self._jt_open_grad,
                                                  no_color_cb=self._jt_no_color,
-                                                 custom_grad_cb=self._jt_custom_grad,
-                                                 webapp_cb=self._jt_open_webapp)
+                                                 custom_grad_cb=self._jt_custom_grad)
             return rows
-        if step=="webapp_wait":
-            return [
-                [{"text": "✨ Открыть WebApp", "icon_custom_emoji_id": PE["link"], "url": s["webapp_url"]}],
-                [{"text": "◁ Назад", "icon_custom_emoji_id": PE["palette"], "callback": self._jt_back_webapp, "args": (uid,)}]
-            ]
         if step=="gradient_menu":
             return self._gradient_menu_markup(self._jt_grad,uid,self._jt_back_col)
         if step=="title": return [[{"text":"Ввести название","icon_custom_emoji_id":PE["sticker"],
@@ -1858,82 +1811,6 @@ class JellyColorMod(loader.Module):
         s["gradient"]=g; s["color"]="grad:✏️ Свой"; s["step"]="title"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
-    async def _jt_open_webapp(self, call, uid):
-        s = self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.", show_alert=True); return
-        import uuid
-        session_id = uuid.uuid4().hex
-        s["webapp_session"] = session_id
-        s["step"] = "webapp_wait"
-        text = s.get("text") or "Aa"
-        base_url = "https://raw.githack.com/justidev-heroku/justi-modules/main/assets/jelly_webapp.html"
-        webapp_url = f"{base_url}?session={session_id}&text={text}&type=emoji"
-        s["webapp_url"] = webapp_url
-        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-        asyncio.ensure_future(self._poll_webapp(call, uid, session_id, "jt"))
-
-    async def _jt_back_webapp(self, call, uid):
-        s = self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.", show_alert=True); return
-        s["step"] = "color"
-        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-
-    async def _poll_webapp(self, call, uid, session_id, flow):
-        import aiohttp
-        bucket = "YcC7nWdjH2RBSzkYZhq6Ye"
-        url = f"https://kvdb.io/{bucket}/{session_id}"
-        for _ in range(300):
-            store = self._sessions if flow == "j" else self._tsessions
-            s = store.get(uid)
-            if not s or s.get("step") != "webapp_wait" or s.get("webapp_session") != session_id:
-                break
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=3) as resp:
-                        if resp.status == 200:
-                            data = (await resp.text()).strip()
-                            if data:
-                                try:
-                                    await session.delete(url, timeout=3)
-                                except Exception:
-                                    pass
-                                if data.startswith("grad:"):
-                                    parts = data.split(":")
-                                    if len(parts) >= 4:
-                                        g_dir = parts[2]
-                                        colors = parts[3].split(",")
-                                        d_name = "По диагонали" if g_dir == "d" else ("По горизонтали" if g_dir == "h" else "По вертикали")
-                                        s["gradient"] = {
-                                            "name": f"Свой ({d_name})",
-                                            "colors": colors,
-                                            "direction": g_dir
-                                        }
-                                        s["color"] = None
-                                else:
-                                    s["color"] = data
-                                    s["gradient"] = None
-                                s["step"] = "title" if flow == "j" else "preview"
-                                if flow == "j":
-                                    await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
-                                else:
-                                    await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-                                    asyncio.ensure_future(self._jt_preview(call, uid))
-                                break
-            except Exception:
-                pass
-            await asyncio.sleep(1)
-        else:
-            store = self._sessions if flow == "j" else self._tsessions
-            s = store.get(uid)
-            if s and s.get("step") == "webapp_wait" and s.get("webapp_session") == session_id:
-                s["step"] = "color"
-                try:
-                    if flow == "j":
-                        await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
-                    else:
-                        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-                except Exception:
-                    pass
 
     async def _jt_title(self,call,value,uid):
         s=self._tsessions.get(uid)
