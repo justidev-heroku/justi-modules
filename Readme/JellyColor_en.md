@@ -4,7 +4,7 @@
 
 **JellyColor** is a module for [Heroku](https://github.com/coddrago/Heroku) that allows you to recolor stickers and custom emojis, apply color gradients, and generate new text-based stickers/emojis from templates with custom font support.
 
-Current version: **v3.4.0**.
+Current version: **v3.5.0**.
 
 ---
 
@@ -18,11 +18,14 @@ Current version: **v3.4.0**.
 
 ## Features
 
+- **Telegram WebApp Integration**: A visual, interactive color and gradient constructor with live custom text/sticker preview.
+- **Fully Asynchronous**: Resource-heavy tasks (decompression, image processing, Lottie compression) run in background threads to keep the userbot interface non-blocking.
+- **Direct Chat Preview**: Template previews are sent directly to the active chat instead of Saved Messages, and deleted automatically once confirmed.
+- **Automatic Fallback (Append)**: If you attempt to create a stickerpack with a short_name you already own, new stickers are added to the existing pack.
 - Recolor static (WEBP) and animated (TGS) stickers/emojis into single solid colors or gradients.
 - Interactive inline constructor `.jt` for generating stickers/emojis from text templates.
-- Color choice: 8 built-in presets, custom HEX entry, or gradient configurations.
+- Color choice: presets, WebApp constructor, manual HEX code, or custom gradient configurations.
 - Support for uploading and managing custom fonts (`.ttf`, `.otf`) stored persistently.
-- Optimized multi-threaded rendering and batch sticker pack processing (significantly accelerated).
 
 ---
 
