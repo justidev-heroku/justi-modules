@@ -4,7 +4,7 @@
 
 **JellyColor** is a module for [Heroku](https://github.com/coddrago/Heroku) that allows you to recolor stickers and custom emojis, apply color gradients, and generate new text-based stickers/emojis from templates with custom font support.
 
-Current version: **v3.5.0**.
+Current version: **v3.6.0**.
 
 ---
 
