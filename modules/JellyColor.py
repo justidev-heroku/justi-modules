@@ -1155,10 +1155,23 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, r
         except Exception as e:
             if "already exists" in str(e).lower() or "already_exists" in str(e).lower():
                 try:
+                    # Fetch current stickers in the set
+                    fs = await client(functions.messages.GetStickerSetRequest(
+                        stickerset=types.InputStickerSetShortName(short_name=sn), hash=0
+                    ))
+                    old_docs = fs.documents
+                    
+                    # Add new stickers
                     for sticker in stickers:
                         await client(functions.stickers.AddStickerToSetRequest(
                             stickerset=types.InputStickerSetShortName(short_name=sn),
                             sticker=sticker
+                        ))
+                    
+                    # Delete old stickers
+                    for doc in old_docs:
+                        await client(functions.stickers.RemoveStickerFromSetRequest(
+                            sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
                         ))
                     return sn,None
                 except Exception as add_err:
