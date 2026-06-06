@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v3.6                       ║
+# ║                        🎨 JellyColor v3.7                       ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v3.6: асинхронность, замена стикеров, настоящие градиенты       ║
+# ║  v3.7: управление градиентами, улучшенное наложение, асинхронность ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 6, 0)
+__version__ = (3, 7, 0)
 
 import asyncio
 import glob
@@ -94,16 +94,18 @@ PE = {
 
 # ─── Gradient presets ────────────────────────────────────────────────────────
 GRADIENT_PRESETS = [
-    {"id":"sunset",   "name":"🌅 Закат",      "colors":["#FF2D55","#FF9500","#FFCC00"], "dir":"d"},
-    {"id":"ocean",    "name":"🌊 Океан",      "colors":["#005C97","#363795","#90E0EF"], "dir":"dr"},
-    {"id":"aurora",   "name":"📣 Аврора",     "colors":["#16213E","#0F3460","#E94560"], "dir":"d"},
-    {"id":"fire",     "name":"🔥 Огонь",      "colors":["#8B0000","#FF4500","#FFD700"], "dir":"v"},
-    {"id":"sakura",   "name":"🌸 Сакура",     "colors":["#F72585","#B5179E","#7209B7"], "dir":"d"},
-    {"id":"galaxy",   "name":"🌌 Галактика",  "colors":["#10002B","#5A189A","#E0AAFF"], "dir":"dr"},
-    {"id":"forest",   "name":"🌿 Лес",        "colors":["#004225","#4CAF50","#A5D6A7"], "dir":"v"},
-    {"id":"neon",     "name":"⚡ Неон",       "colors":["#00F5FF","#B000FF","#FF00A0"], "dir":"h"},
-    {"id":"gold",     "name":"👑 Золото",     "colors":["#7B5800","#FFD700","#FFFDE0"], "dir":"d"},
-    {"id":"candy",    "name":"🍭 Конфета",    "colors":["#FF61D2","#FE9090","#FFD180"], "dir":"dr"},
+    {"id":"sunset",    "name":"🌅 Закат",      "colors":["#FF416C","#FF4B2B"], "dir":"d"},
+    {"id":"ocean",     "name":"🌊 Океан",      "colors":["#1A2980","#26D0CE"], "dir":"dr"},
+    {"id":"aurora",    "name":"📣 Аврора",     "colors":["#00C9FF","#92FE9D"], "dir":"d"},
+    {"id":"fire",      "name":"🔥 Огонь",      "colors":["#F12711","#F5AF19"], "dir":"v"},
+    {"id":"sakura",    "name":"🌸 Сакура",     "colors":["#EC008C","#FC6767"], "dir":"d"},
+    {"id":"galaxy",    "name":"🌌 Галактика",  "colors":["#3F5EFB","#FC466B"], "dir":"dr"},
+    {"id":"forest",    "name":"🌿 Лес",        "colors":["#11998E","#38EF7D"], "dir":"v"},
+    {"id":"neon",      "name":"⚡ Неон",       "colors":["#8A2387","#E94057","#F27121"], "dir":"h"},
+    {"id":"gold",      "name":"👑 Золото",     "colors":["#BF953F","#FCF6BA","#B38728","#FBF5B7"], "dir":"d"},
+    {"id":"candy",     "name":"🍭 Конфета",    "colors":["#EE9CA7","#FFDDE1"], "dir":"dr"},
+    {"id":"cyberpunk", "name":"🔮 Киберпанк",  "colors":["#00F2FE","#4FACFE","#F35588"], "dir":"d"},
+    {"id":"magma",     "name":"🌋 Магма",      "colors":["#000000","#7E0000","#FF3B00","#FFE600"], "dir":"v"},
 ]
 
 TEMPLATE_SETS = [
@@ -137,50 +139,66 @@ def rgb_to_hex(r: int, g: int, b: int) -> str:
 # ─── Image tinting ────────────────────────────────────────────────────────────
 
 def tint_image(img: Image.Image, hex_color: str) -> Image.Image:
-    r, g, b = hex_to_rgb(hex_color)
+    from PIL import ImageChops
+    r_target, g_target, b_target = hex_to_rgb(hex_color)
     img = img.convert("RGBA")
-    _, _, _, ao = img.split()
-    gray = img.convert("L")
-    lut_r = [int(i * r / 255) for i in range(256)]
-    lut_g = [int(i * g / 255) for i in range(256)]
-    lut_b = [int(i * b / 255) for i in range(256)]
-    rn = gray.point(lut_r)
-    gn = gray.point(lut_g)
-    bn = gray.point(lut_b)
+    r, g, b, ao = img.split()
+    max_rg = ImageChops.lighter(r, g)
+    val = ImageChops.lighter(max_rg, b)
+    lut_r = [int(i * r_target / 255) for i in range(256)]
+    lut_g = [int(i * g_target / 255) for i in range(256)]
+    lut_b = [int(i * b_target / 255) for i in range(256)]
+    rn = val.point(lut_r)
+    gn = val.point(lut_g)
+    bn = val.point(lut_b)
     return Image.merge("RGBA", (rn, gn, bn, ao))
 
 
 def create_gradient_image(width: int, height: int, colors_hex: list, direction: str) -> Image.Image:
+    tw, th = 64, 64
+    img = Image.new("RGB", (tw, th))
+    pixels = []
+    n = len(colors_hex)
     rgbs = [hex_to_rgb(c) for c in colors_hex]
-    if direction == "h":
-        grad = Image.new("RGB", (len(rgbs), 1))
-        grad.putdata(rgbs)
-        return grad.resize((width, height), Image.BILINEAR)
-    elif direction == "v":
-        grad = Image.new("RGB", (1, len(rgbs)))
-        grad.putdata(rgbs)
-        return grad.resize((width, height), Image.BILINEAR)
-    else:
-        size = int(max(width, height) * 1.5)
-        grad = Image.new("RGB", (1, len(rgbs)))
-        grad.putdata(rgbs)
-        grad_square = grad.resize((size, size), Image.BILINEAR)
-        angle = 45 if direction in ("d", "dl") else -45
-        rotated = grad_square.rotate(angle, resample=Image.BILINEAR, expand=False)
-        left = (size - width) // 2
-        top = (size - height) // 2
-        return rotated.crop((left, top, left + width, top + height))
+    
+    for y in range(th):
+        for x in range(tw):
+            if direction == "h":
+                t = x / (tw - 1)
+            elif direction == "v":
+                t = y / (th - 1)
+            elif direction in ("d", "dl"):
+                t = (x + y) / (tw + th - 2)
+            elif direction == "dr":
+                t = ((tw - 1 - x) + y) / (tw + th - 2)
+            else:
+                t = (x + y) / (tw + th - 2)
+            
+            t = max(0.0, min(1.0, t))
+            scaled = t * (n - 1)
+            idx = min(int(scaled), n - 2)
+            f = scaled - idx
+            r1, g1, b1 = rgbs[idx]
+            r2, g2, b2 = rgbs[idx + 1]
+            r = int(r1 + (r2 - r1) * f)
+            g = int(g1 + (g2 - g1) * f)
+            b = int(b1 + (b2 - b1) * f)
+            pixels.append((r, g, b))
+            
+    img.putdata(pixels)
+    return img.resize((width, height), Image.BILINEAR)
 
 
 def tint_image_gradient(img: Image.Image, colors_hex: list, direction: str) -> Image.Image:
     from PIL import ImageChops
     img = img.convert("RGBA")
     w, h = img.size
-    _, _, _, ao = img.split()
-    gray = img.convert("L")
+    r, g, b, ao = img.split()
+    max_rg = ImageChops.lighter(r, g)
+    val = ImageChops.lighter(max_rg, b)
     grad_img = create_gradient_image(w, h, colors_hex, direction)
-    gray_rgb = Image.merge("RGB", (gray, gray, gray))
-    tinted_rgb = ImageChops.multiply(grad_img, gray_rgb)
+    val_rgb = Image.merge("RGB", (val, val, val))
+    tinted_rgb = ImageChops.multiply(grad_img, val_rgb)
     tr, tg, tb = tinted_rgb.split()
     return Image.merge("RGBA", (tr, tg, tb, ao))
 
@@ -1379,16 +1397,24 @@ class JellyColorMod(loader.Module):
     # ─── Shared color/gradient UI helpers ────────────────────────────────────
 
     def _gradient_menu_text(self) -> str:
+        user_gradients = self.db.get("JellyColor", "user_gradients", [])
+        all_grads = GRADIENT_PRESETS + user_gradients
         lines = [pe("🎨", PE["stats"]) + " <b>Выберите градиент</b>\n"]
-        for g in GRADIENT_PRESETS:
+        for g in all_grads:
             lines.append(f"{g['name']}  <code>{'  '.join(g['colors'])}</code>")
         return "\n".join(lines)
 
     def _gradient_menu_markup(self, grad_cb, uid, back_cb):
-        rows = []
-        for g in GRADIENT_PRESETS:
-            rows.append([{"text": g["name"], "icon_custom_emoji_id": PE["stats"],
-                          "callback": grad_cb, "args": (uid, g["id"])}])
+        user_gradients = self.db.get("JellyColor", "user_gradients", [])
+        all_grads = GRADIENT_PRESETS + user_gradients
+        rows = []; row = []
+        for g in all_grads:
+            row.append({"text": g["name"], "icon_custom_emoji_id": PE["stats"],
+                        "callback": grad_cb, "args": (uid, g["id"])})
+            if len(row) == 2:
+                rows.append(row); row = []
+        if row:
+            rows.append(row)
         rows.append([{"text": "◁ Назад", "icon_custom_emoji_id": PE["palette"],
                       "callback": back_cb, "args": (uid,)}])
         return rows
@@ -1507,7 +1533,8 @@ class JellyColorMod(loader.Module):
     async def _j_grad(self,call,uid,grad_id):
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        g=next((x for x in GRADIENT_PRESETS if x["id"]==grad_id),None)
+        user_gradients = self.db.get("JellyColor", "user_gradients", [])
+        g=next((x for x in GRADIENT_PRESETS + user_gradients if x["id"]==grad_id),None)
         if not g: return
         s["gradient"]=g; s["color"]="grad:"+g["name"]; s["step"]="title"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
@@ -1828,7 +1855,8 @@ class JellyColorMod(loader.Module):
     async def _jt_grad(self,call,uid,grad_id):
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        g=next((x for x in GRADIENT_PRESETS if x["id"]==grad_id),None)
+        user_gradients = self.db.get("JellyColor", "user_gradients", [])
+        g=next((x for x in GRADIENT_PRESETS + user_gradients if x["id"]==grad_id),None)
         if not g: return
         s["gradient"]=g; s["color"]="grad:"+g["name"]; s["step"]="title"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
@@ -2101,6 +2129,86 @@ class JellyColorMod(loader.Module):
         await self._client.send_file(message.chat_id,buf,
             caption=pe("📤",PE["export"])+f" Экспорт — <b>{len(stats)}</b> записей",parse_mode="HTML")
         await message.delete()
+
+    @loader.command()
+    async def jaddgrad(self, message: Message):
+        """Добавить свой градиент: .jaddgrad <название> <HEX,HEX,...> [h/v/d/dr]"""
+        args = utils.get_args_raw(message).strip()
+        if not args:
+            await utils.answer(message, pe("ℹ️", PE["info"]) + " Использование: <code>.jaddgrad <название> <HEX,HEX,...> [направление]</code>\nПример: <code>.jaddgrad Мой #FF0000,#0000FF d</code>")
+            return
+            
+        parts = args.split(maxsplit=2)
+        if len(parts) < 2:
+            await utils.answer(message, pe("❌", PE["err"]) + " Укажите название и цвета (HEX через запятую)")
+            return
+            
+        name = parts[0]
+        colors_str = parts[1]
+        direction = parts[2].lower() if len(parts) > 2 else "d"
+        if direction not in ("h", "v", "d", "dr"):
+            direction = "d"
+            
+        color_parts = [c.strip() for c in colors_str.split(",")]
+        colors = []
+        for p in color_parts:
+            c = p if p.startswith("#") else "#" + p
+            if re.fullmatch(r"#[0-9a-fA-F]{6}", c):
+                colors.append(c.upper())
+                
+        if len(colors) < 2:
+            await utils.answer(message, pe("❌", PE["err"]) + " Нужно указать минимум 2 корректных HEX-цвета через запятую")
+            return
+            
+        user_gradients = self.db.get("JellyColor", "user_gradients", [])
+        if any(g["name"].lower().replace("✨ ", "") == name.lower() for g in user_gradients):
+            await utils.answer(message, pe("❌", PE["err"]) + f" Градиент с названием <b>{name}</b> уже существует.")
+            return
+            
+        import uuid
+        g_id = "user_" + uuid.uuid4().hex[:8]
+        new_g = {
+            "id": g_id,
+            "name": "✨ " + name,
+            "colors": colors,
+            "dir": direction
+        }
+        user_gradients.append(new_g)
+        self.db.set("JellyColor", "user_gradients", user_gradients)
+        await utils.answer(message, pe("✅", PE["ok"]) + f" Градиент <b>{name}</b> успешно добавлен!")
+
+    @loader.command()
+    async def jdelgrad(self, message: Message):
+        """Удалить свой градиент: .jdelgrad <название>"""
+        name = utils.get_args_raw(message).strip()
+        if not name:
+            await utils.answer(message, pe("ℹ️", PE["info"]) + " Укажите название градиента для удаления: <code>.jdelgrad <название></code>")
+            return
+            
+        user_gradients = self.db.get("JellyColor", "user_gradients", [])
+        new_list = [g for g in user_gradients if g["name"].lower().replace("✨ ", "") != name.lower()]
+        if len(new_list) == len(user_gradients):
+            await utils.answer(message, pe("❌", PE["err"]) + f" Пользовательский градиент <b>{name}</b> не найден.")
+            return
+            
+        self.db.set("JellyColor", "user_gradients", new_list)
+        await utils.answer(message, pe("✅", PE["ok"]) + f" Градиент <b>{name}</b> удален.")
+
+    @loader.command()
+    async def jgrads(self, message: Message):
+        """Список доступных градиентов"""
+        user_gradients = self.db.get("JellyColor", "user_gradients", [])
+        lines = [pe("🎨", PE["stats"]) + " <b>Системные градиенты:</b>\n"]
+        for g in GRADIENT_PRESETS:
+            lines.append(f"• {g['name']} (<code>{g['dir']}</code>): <code>{','.join(g['colors'])}</code>")
+            
+        if user_gradients:
+            lines.append("\n<b>✨ Пользовательские градиенты:</b>\n")
+            for g in user_gradients:
+                clean_name = g['name'].replace("✨ ", "")
+                lines.append(f"• {clean_name} (<code>{g['dir']}</code>): <code>{','.join(g['colors'])}</code>")
+                
+        await utils.answer(message, "\n".join(lines), parse_mode="HTML")
 
     # ─── .jdump ───────────────────────────────────────────────────────────────
 

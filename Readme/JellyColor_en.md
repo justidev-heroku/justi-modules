@@ -4,7 +4,7 @@
 
 **JellyColor** is a module for [Heroku](https://github.com/coddrago/Heroku) that allows you to recolor stickers and custom emojis, apply color gradients, and generate new text-based stickers/emojis from templates with custom font support.
 
-Current version: **v3.6.0**.
+Current version: **v3.7.0**.
 
 ---
 
@@ -18,12 +18,14 @@ Current version: **v3.6.0**.
 
 ## Features
 
+- **High-Fidelity Gradient Overlays**: Apply gradients to static WebP images/stickers using HSV Value-luminosity mapping. This fully preserves shading, textures, and original highlights while preventing color fading on vibrant elements (like red or blue).
+- **Custom Gradients**: Add and save custom multi-color gradients to the database, specifying their layout direction (horizontal, vertical, diagonal). Custom gradients are automatically integrated into the inline menus.
 - **Fully Asynchronous**: Resource-heavy tasks (decompression, image processing, Lottie compression) run in background threads to keep the userbot interface non-blocking.
 - **Direct Chat Preview**: Template previews are sent directly to the active chat instead of Saved Messages, and deleted automatically once confirmed.
-- **Automatic Fallback (Append)**: If you attempt to create a stickerpack with a short_name you already own, new stickers are added to the existing pack.
+- **Automatic Replacement (Fallback)**: If you attempt to create a stickerpack with a short_name you already own, the module automatically replaces old stickers with the new ones.
 - Recolor static (WEBP) and animated (TGS) stickers/emojis into single solid colors or gradients.
 - Interactive inline constructor `.jt` for generating stickers/emojis from text templates.
-- Color choice: 8 built-in presets, custom HEX entry, or gradient configurations.
+- Color choice: 12 premium presets, custom HEX entry, or gradient configurations.
 - Support for uploading and managing custom fonts (`.ttf`, `.otf`) stored persistently.
 
 ---
@@ -38,6 +40,9 @@ Current version: **v3.6.0**.
 | `.jaddfont <title>` | Add a custom font (replying to a `.ttf`/`.otf` file) |
 | `.jdelfont <title>` | Delete a custom font |
 | `.jfonts` | List installed custom fonts |
+| `.jaddgrad <name> <HEX,HEX,...> [h/v/d/dr]` | Save a custom color gradient |
+| `.jdelgrad <name>` | Delete a custom color gradient |
+| `.jgrads` | List all available system and custom gradients |
 | `.tstats` | Statistics of creation operations |
 | `.jdel <short_name>` | Delete a pack entry from statistics |
 | `.jexport` | Export creation stats to JSON |
