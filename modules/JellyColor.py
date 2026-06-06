@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v3.8                       ║
+# ║                        🎨 JellyColor v3.8.1                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v3.8: контрастный текст, фикс 100x100 emoji, градиенты          ║
+# ║  v3.8.1: контрастный текст, фикс 100x100 emoji, фикс съезда слоёв  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 8, 0)
+__version__ = (3, 8, 1)
 
 import asyncio
 import glob
@@ -835,6 +835,13 @@ def _verts_to_bounds(verts):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def _is_text_name(name):
+    if not name or not isinstance(name, str):
+        return False
+    name_lower = name.lower()
+    return any(x in name_lower for x in ("text", "txt", "emc", "logo", "user"))
+
+
 def _get_textgroup_bounds(lottie):
     def find_named(obj):
         if isinstance(obj, dict):
@@ -879,7 +886,9 @@ def _get_textgroup_bounds(lottie):
     matched = []
     def walk(obj, path=()):
         if isinstance(obj, dict):
-            if obj.get("ty")=="gr" and _gfl(obj) and (_cdsh(obj)==0 or _cdsh(obj)>=3) and _cnsh(obj)>=3:
+            is_in_asset = "assets" in path
+            is_safe = is_in_asset or _is_text_name(obj.get("nm"))
+            if is_safe and obj.get("ty")=="gr" and _gfl(obj) and (_cdsh(obj)==0 or _cdsh(obj)>=3) and _cnsh(obj)>=3:
                 matched.append((obj, path))
             for k, v in obj.items():
                 walk(v, path + (k,))
@@ -1031,7 +1040,7 @@ def _replace_textgroup(lottie, new_shapes):
         return True
 
     # 2. Try to find by shape layers containing "text" in name
-    def try_ll(layers):
+    def try_ll(layers, path_prefix="top"):
         for layer in layers:
             if layer.get("ty")!=4: continue
             shapes=layer.get("shapes",[]); nm=layer.get("nm","")
@@ -1040,11 +1049,14 @@ def _replace_textgroup(lottie, new_shapes):
             if "user" in nm_lower: continue
             n=sum(1 for s in shapes if s.get("ty")=="sh")
             fl=any(s.get("ty")=="fl" for s in shapes)
-            if ("text" in nm_lower and n>=2 and fl) or (n>=3 and fl):
+            is_safe = _is_text_name(nm) or ("assets" in path_prefix)
+            if is_safe and (("text" in nm_lower and n>=2 and fl) or (n>=3 and fl)):
                 _patch(shapes)
 
-    for ll in [lottie.get("layers",[])]+[a.get("layers",[]) for a in lottie.get("assets",[])]:  
-        try_ll(ll)
+    for ll, name in [(lottie.get("layers",[]), "top")]:
+        try_ll(ll, name)
+    for a in lottie.get("assets",[]):
+        try_ll(a.get("layers",[]), "assets")
 
     if patched_any:
         return True
@@ -1062,7 +1074,9 @@ def _replace_textgroup(lottie, new_shapes):
         if isinstance(obj, dict):
             nm = obj.get("nm", "")
             nm_lower = nm.lower() if isinstance(nm, str) else ""
-            if "user" not in nm_lower:
+            is_in_asset = "assets" in path
+            is_safe = is_in_asset or _is_text_name(nm)
+            if is_safe and "user" not in nm_lower:
                 if obj.get("ty") == "gr" and _hfl(obj.get("it",[])):
                     # Text placeholders like "emc" have between 3 and 12 shapes usually
                     # Complex drawings like a car outline have many more
