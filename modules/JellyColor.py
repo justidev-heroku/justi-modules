@@ -1900,9 +1900,18 @@ class JellyColorMod(loader.Module):
             else:
                 buf=io.BytesIO(raw); buf.name="preview.webp"
             buf.seek(0)
+            
+            chat_target = getattr(call, "chat_id", None) or uid
+            try:
+                chat_target = await self._client.get_input_entity(chat_target)
+            except Exception:
+                pass
+
             s["preview_msg"]=await self._client.send_file(
-                call.chat_id,buf,caption=pe("👁",PE["eye"])+" <b>Preview: "+s["text"]+"</b>",parse_mode="HTML")
-        except Exception: pass
+                chat_target,buf,caption=pe("👁",PE["eye"])+" <b>Preview: "+s["text"]+"</b>",parse_mode="HTML")
+        except Exception as e:
+            import logging
+            logging.getLogger("JellyColor").error(f"Error in preview: {e}", exc_info=True)
 
     async def _jt_confirm(self,call,uid):
         s=self._tsessions.get(uid)
