@@ -112,7 +112,7 @@ GRADIENT_PRESETS = [
 
 TEMPLATE_SETS = [
     {"title": "♣️ BLACK HOLE",  "short_name": "main_by_emojicreationbot"},
-    {"title": "🎨 COLOR",       "short_name": "ddfdfdvdf_by_justidev"},
+    {"title": "🎨 COLOR",       "short_name": "testmain1_by_justidev"},
     {"title": "🌀 ALL IN ALL",  "short_name": "SpizdiAllEmojis"},
 ]
 
