@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 8, 1)
+__version__ = (3, 8, 2)
 
 import asyncio
 import glob
@@ -1194,7 +1194,7 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     bounds=_get_textgroup_bounds(lottie)
     if bounds:
         x1,y1,x2,y2=bounds; cx=(x1+x2)/2; cy=(y1+y2)/2
-        ns=_text_to_lottie_shapes(new_text,font_path,cx,cy,max(abs(y2-y1),5.),max_width=max(abs(x2-x1),5.))
+        ns=_text_to_lottie_shapes(new_text,font_path,cx,cy,max(abs(y2-y1),5.)*1.15,max_width=max(abs(x2-x1),5.)*1.15)
         if ns and _replace_textgroup(lottie,ns): changed=True
     if _find_username_bounds(lottie):
         if _replace_username(lottie,NEW_USERNAME,font_path): changed=True
@@ -1797,7 +1797,7 @@ class JellyColorMod(loader.Module):
         self._expire()
         uid=message.sender_id
         self._tsessions[uid]={"ts":time.time(),"step":"template","template":None,"text":None,
-                               "color":None,"pack_name":None,"preview_msg":None}
+                               "color":None,"pack_name":None,"preview_msg":None,"is_emoji":True}
         await message.delete()
         await self.inline.form(text=self._jt_text(uid),reply_markup=self._jt_markup(uid),message=message)
     def _jt_text(self, uid):
@@ -1806,11 +1806,14 @@ class JellyColorMod(loader.Module):
         if step=="text": return pe("✍️",PE["write"])+f" <b>Введите текст</b>\n\nШаблон: <b>{s['template']['title']}</b>\n2-4 символа — оптимально."
         if step=="font": return pe("✍️",PE["write"])+f" <b>Выберите шрифт</b>\n\nТекст: <code>{s['text']}</code>"
         if step=="preview": return pe("👁",PE["eye"])+f" <b>Предпросмотр</b>\n\nТекст: <code>{s['text']}</code> (Шрифт: <b>{s.get('font_title','Comfortaa')}</b>)\nСмотрите на тестовый эмодзи выше."
+        if step=="pack_type": return pe("📦",PE["pack"])+f" <b>Тип стикер-пака</b>\n\nТекст: <code>{s['text']}</code>\n\nВыберите тип создаваемого пака:\n• <b>Custom Emoji</b> (отображаются в тексте, чатах, нужен Premium)\n• <b>Обычные стикеры</b> (отображаются в панели стикеров, размер 512x512)"
         if step=="color":
             hist=self._color_history()
             hs=("\n"+pe("⏰",PE["clock"])+" Последние: "+"  ".join(f"<code>{c}</code>" for c in hist)) if hist else ""
-            return pe("🎨",PE["palette"])+f" <b>Цвет эмодзи</b>\n\nТекст: <code>{s['text']}</code>{hs}"
-        if step=="title": return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nТекст: <code>{s['text']}</code>" + (f"  Цвет: <code>{s['color']}</code>" if s.get('color') else "  (без перекраски)") + "\n\n<i>Введите отображаемое название (любые символы)</i>"
+            return pe("🎨",PE["palette"])+f" <b>Цвет элементов</b>\n\nТекст: <code>{s['text']}</code>{hs}"
+        if step=="title":
+            pack_t = "эмодзи" if s.get("is_emoji", True) else "стикеров"
+            return pe("🏷",PE["sticker"])+f" <b>Название пака {pack_t}</b>\n\nТекст: <code>{s['text']}</code>" + (f"  Цвет: <code>{s['color']}</code>" if s.get('color') else "  (без перекраски)") + "\n\n<i>Введите отображаемое название (любые символы)</i>"
         if step=="name": return pe("🏷",PE["sticker"])+f" <b>short_name пака</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите short_name — только a-z, 0-9, _</i>"
         return pe("⏰",PE["clock"])+" <b>Создаём...</b>"
 
@@ -1829,6 +1832,10 @@ class JellyColorMod(loader.Module):
         if step=="preview": return [[
             {"text":"✅ Хорошо","icon_custom_emoji_id":PE["ok"],"callback":self._jt_confirm,"args":(uid,)},
             {"text":"✏️ Изменить","icon_custom_emoji_id":PE["palette"],"callback":self._jt_retry,"args":(uid,)},
+        ]]
+        if step=="pack_type": return [[
+            {"text":"✨ Custom Emoji","icon_custom_emoji_id":PE["sticker"],"callback":self._jt_type_sel,"args":(uid,True)},
+            {"text":"🖼 Обычные стикеры","icon_custom_emoji_id":PE["sticker"],"callback":self._jt_type_sel,"args":(uid,False)}
         ]]
         if step=="color":
             rows=self._color_rows_with_gradient(uid,self._jt_col,self._jt_hex,self._jt_open_grad,
@@ -1903,6 +1910,13 @@ class JellyColorMod(loader.Module):
         if s.get("preview_msg"):
             try: await s["preview_msg"].delete()
             except Exception: pass
+        s["step"]="pack_type"
+        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
+
+    async def _jt_type_sel(self,call,uid,is_emoji):
+        s=self._tsessions.get(uid)
+        if not s: await call.answer("Сессия устарела.",show_alert=True); return
+        s["is_emoji"]=is_emoji
         s["step"]="color"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
@@ -1994,6 +2008,7 @@ class JellyColorMod(loader.Module):
         s=self._tsessions[uid]
         tmpl,txt,pname,color=s["template"],s["text"],s["pack_name"],s.get("color")
         gradient=s.get("gradient")
+        is_emoji=s.get("is_emoji", True)
         try:
             fs=await self._client(functions.messages.GetStickerSetRequest(
                 stickerset=types.InputStickerSetShortName(short_name=tmpl["short_name"]),hash=0))
@@ -2025,7 +2040,8 @@ class JellyColorMod(loader.Module):
                 buf=io.BytesIO(patched); buf.name="sticker.tgs"
             else:
                 def _process_img():
-                    img=Image.open(io.BytesIO(raw)).convert("RGBA").resize((100,100),Image.LANCZOS)
+                    sz = 100 if is_emoji else 512
+                    img=Image.open(io.BytesIO(raw)).convert("RGBA").resize((sz,sz),Image.LANCZOS)
                     if gradient:
                         img=tint_image_gradient(img, gradient["colors"], gradient.get("dir", "d"))
                     elif color and not color.startswith("grad:"):
@@ -2043,23 +2059,23 @@ class JellyColorMod(loader.Module):
                 if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
                     es=getattr(a,"alt",None) or "✨"; break
             up=await self._client.upload_file(buf,file_name=buf.name)
-            return await _upload_item(self._client,mee,up,mime,es,True)
+            return await _upload_item(self._client,mee,up,mime,es,is_emoji)
         ordered=await self._parallel(docs,_fn,"Создаём",call)
         if not ordered:
             await call.edit(text=pe("❌",PE["err"])+" Ни один эмодзи не обработан.")
             self._tsessions.pop(uid,None); return
         color_label=gradient["name"] if gradient else (color or "без перекраски")
         try:
-            pack_title=s.get("pack_title") or txt+" Emoji Pack"
-            fn,err=await _safe_create_set(self._client,me.id,pack_title,pname,ordered,True)
+            pack_title=s.get("pack_title") or (txt+" Emoji Pack" if is_emoji else txt+" Sticker Pack")
+            fn,err=await _safe_create_set(self._client,me.id,pack_title,pname,ordered,is_emoji)
             if err: raise ValueError(err)
-            link="https://t.me/addemoji/"+fn
+            link="https://t.me/"+("addemoji/" if is_emoji else "addstickers/")+fn
         except Exception as e:
             await call.edit(text=pe("❌",PE["err"])+" <code>"+str(e)+"</code>")
-            await self._report_error(e, "emoji", pname)
+            await self._report_error(e, "emoji" if is_emoji else "sticker", pname)
             self._tsessions.pop(uid,None); return
         stats=self.db.get("JellyColor","stats",[])
-        stats.append({"name":fn,"link":link,"color":color or "text","count":len(ordered),"type":"emoji","ts":int(time.time())})
+        stats.append({"name":fn,"link":link,"color":color or "text","count":len(ordered),"type":"emoji" if is_emoji else "sticker","ts":int(time.time())})
         self.db.set("JellyColor","stats",stats)
         await call.edit(
             text=(pe("✅",PE["ok"])+" <b>Готово!</b>\n\n"
