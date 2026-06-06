@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v3.7                       ║
+# ║                        🎨 JellyColor v3.8                       ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v3.7: управление градиентами, улучшенное наложение, асинхронность ║
+# ║  v3.8: контрастный текст, фикс 100x100 emoji, градиенты          ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 7, 2)
+__version__ = (3, 8, 0)
 
 import asyncio
 import glob
@@ -135,6 +135,28 @@ def hex_to_rgb(hex_color: str):
 
 def rgb_to_hex(r: int, g: int, b: int) -> str:
     return "#{:02X}{:02X}{:02X}".format(r, g, b)
+
+
+def _luminance(hex_color: str) -> float:
+    """Вычисляет относительную яркость цвета (0=чёрный, 1=белый)."""
+    r, g, b = hex_to_rgb(hex_color)
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+
+def _contrast_text_color(hex_color: str) -> str:
+    """Возвращает '#FFFFFF' для тёмных фонов, '#000000' для светлых."""
+    return "#FFFFFF" if _luminance(hex_color) < 0.5 else "#000000"
+
+
+def _dominant_color_from_gradient(colors: list) -> str:
+    """Средний цвет градиента для определения контраста."""
+    if not colors:
+        return "#000000"
+    rs, gs, bs = [], [], []
+    for c in colors:
+        r, g, b = hex_to_rgb(c)
+        rs.append(r); gs.append(g); bs.append(b)
+    return rgb_to_hex(sum(rs)//len(rs), sum(gs)//len(gs), sum(bs)//len(bs))
 
 
 # ─── Image tinting ────────────────────────────────────────────────────────────
@@ -1106,6 +1128,50 @@ OLD_USERNAME = "@emojicreationbot"
 NEW_USERNAME = "@freecreateemoji"
 
 
+def _set_text_fill_color(lottie: dict, hex_color: str) -> None:
+    """Устанавливает цвет fill текстовых групп (TextGroup/Text) на hex_color.
+    Используется для контрастного текста: белый на тёмном фоне, чёрный на светлом.
+    """
+    r, g, b = hex_to_rgb(hex_color)
+    nr, ng, nb = r / 255, g / 255, b / 255
+
+    def _is_text_group(obj):
+        if obj.get("ty") != "gr":
+            return False
+        nm = (obj.get("nm") or "").lower()
+        return "textgroup" in nm or nm == "text"
+
+    def _set_fill(items):
+        for item in items:
+            if isinstance(item, dict) and item.get("ty") == "fl":
+                c = item.get("c", {})
+                if isinstance(c, dict):
+                    k = c.get("k")
+                    if isinstance(k, list) and len(k) >= 3 and isinstance(k[0], (int, float)):
+                        c["k"] = [nr, ng, nb] + k[3:]
+                    elif isinstance(k, list):
+                        for kf in k:
+                            if isinstance(kf, dict):
+                                s = kf.get("s")
+                                if isinstance(s, list) and len(s) >= 3:
+                                    kf["s"] = [nr, ng, nb] + s[3:]
+                                e = kf.get("e")
+                                if isinstance(e, list) and len(e) >= 3:
+                                    kf["e"] = [nr, ng, nb] + e[3:]
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            if _is_text_group(obj):
+                _set_fill(obj.get("it", []))
+            for v in obj.values():
+                _walk(v)
+        elif isinstance(obj, list):
+            for x in obj:
+                _walk(x)
+
+    _walk(lottie)
+
+
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if not font_path:
         font_path=_ensure_font()
@@ -1185,8 +1251,10 @@ async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, i
     is_tgs=mime=="application/x-tgsticker"
     mt="application/x-tgsticker" if is_tgs else "image/webp"
     fn="sticker.tgs" if is_tgs else "sticker.webp"
-    sz=100 if is_emoji else 512
-    extra_attrs=[] if is_tgs else [types.DocumentAttributeImageSize(w=sz,h=sz)]
+    if is_tgs or is_emoji:
+        extra_attrs=[]
+    else:
+        extra_attrs=[types.DocumentAttributeImageSize(w=512,h=512)]
     media=types.InputMediaUploadedDocument(
         file=uploaded,mime_type=mt,
         attributes=[types.DocumentAttributeFilename(file_name=fn),attr]+extra_attrs,
@@ -1930,8 +1998,14 @@ class JellyColorMod(loader.Module):
                     modify_lottie(lottie_obj, txt, s.get("font_path"))
                     if gradient:
                         apply_gradient_lottie(lottie_obj, gradient)
+                        tc=_contrast_text_color(_dominant_color_from_gradient(gradient["colors"]))
                     elif color:
                         tint_lottie(lottie_obj, color)
+                        tc=_contrast_text_color(color)
+                    else:
+                        tc=None
+                    if tc:
+                        _set_text_fill_color(lottie_obj, tc)
                     return compress_tgs(lottie_obj)
                 patched = await loop.run_in_executor(None, _process_tgs)
                 buf=io.BytesIO(patched); buf.name="sticker.tgs"
