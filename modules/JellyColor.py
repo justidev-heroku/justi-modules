@@ -29,9 +29,11 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 8, 2)
+__version__ = (3, 8, 3)
 
 import asyncio
+from lottie.objects import Animation, Group, ShapeLayer, TextLayer, Path, Bezier, Fill, Color, TransformShape, BoundingBox, FillRule
+from lottie import NVector
 import glob
 import gzip
 import io
@@ -829,97 +831,119 @@ def _collect_path_verts(obj):
     return verts
 
 
-def _verts_to_bounds(verts):
-    if not verts: return None
-    xs=[v[0] for v in verts]; ys=[v[1] for v in verts]
-    return (min(xs), min(ys), max(xs), max(ys))
+def should_ignore(item):
+    name = (getattr(item, "name", "") or "").lower()
+    if any(x in name for x in ("matte", "mask", "clip", "hidden")):
+        return True
+    if getattr(item, "hidden", False):
+        return True
+    if hasattr(item, "matte_mode") and item.matte_mode is not None:
+        val = item.matte_mode
+        if hasattr(val, "value"):
+            val = val.value
+        if val != 0:
+            return True
+    if hasattr(item, "matte_target") and item.matte_target:
+        return True
+    return False
 
+def get_all_elements(comp):
+    """Recursively yield all layers, assets, and shape groups/elements in an Animation/Composition."""
+    for layer in comp.layers:
+        if should_ignore(layer):
+            continue
+        yield layer
+        if hasattr(layer, "shapes"):
+            for shape in layer.shapes:
+                yield from _walk_shape(shape)
+    if hasattr(comp, "assets"):
+        for asset in comp.assets:
+            if hasattr(asset, "layers"):
+                for layer in asset.layers:
+                    if should_ignore(layer):
+                        continue
+                    yield layer
+                    if hasattr(layer, "shapes"):
+                        for shape in layer.shapes:
+                            yield from _walk_shape(shape)
 
-def _is_text_name(name):
-    if not name or not isinstance(name, str):
-        return False
-    name_lower = name.lower()
-    return any(x in name_lower for x in ("text", "txt", "emc", "logo", "user"))
+def _walk_shape(shape):
+    if should_ignore(shape):
+        return
+    yield shape
+    if hasattr(shape, "shapes"):
+        for sub in shape.shapes:
+            yield from _walk_shape(sub)
 
+def find_text_target(animation: Animation):
+    # Priority 1: Live TextLayer
+    for el in get_all_elements(animation):
+        if isinstance(el, TextLayer):
+            return el
 
-def _get_textgroup_bounds(lottie):
-    def find_named(obj):
-        if isinstance(obj, dict):
-            if obj.get("ty")=="gr" and obj.get("nm")=="TextGroup":
-                b=_verts_to_bounds(_collect_path_verts(obj))
-                if b: return b
-            for v in obj.values():
-                r=find_named(v)
-                if r: return r
-        elif isinstance(obj, list):
-            for item in obj:
-                r=find_named(item)
-                if r: return r
-        return None
-    b=find_named(lottie)
-    if b: return b
+    # Priority 2: Keyword match (excluding username)
+    keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"]
+    for el in get_all_elements(animation):
+        if hasattr(el, "name") and el.name:
+            name_lower = el.name.lower()
+            if "user" not in name_lower and any(kw in name_lower for kw in keywords):
+                if isinstance(el, (Group, ShapeLayer)):
+                    return el
 
-    def find_text_layer(layers):
-        for layer in layers:
-            if layer.get("ty")!=4: continue
-            nm=layer.get("nm",""); shapes=layer.get("shapes",[])
-            n_sh=sum(1 for s in shapes if s.get("ty")=="sh")
-            has_fl=any(s.get("ty")=="fl" for s in shapes)
-            if ("text" in nm.lower() or "Text" in nm) and n_sh>=2 and has_fl:
-                b=_verts_to_bounds(_collect_path_verts({"shapes":shapes}))
-                if b: return b
-        return None
-
-    all_ll=[lottie.get("layers",[])]+[a.get("layers",[]) for a in lottie.get("assets",[])]
-    for ll in all_ll:
-        b=find_text_layer(ll)
-        if b: return b
-
-    def _gfl(gr): return any(x.get("ty")=="fl" for x in gr.get("it",[]))
-    def _cdsh(gr): return sum(1 for x in gr.get("it",[]) if x.get("ty")=="sh")
-    def _cnsh(gr):
-        n=0
-        for x in gr.get("it",[]):
-            n+=1 if x.get("ty")=="sh" else (_cnsh(x) if x.get("ty")=="gr" else 0)
-        return n
-
-    matched = []
-    def walk(obj, path=()):
-        if isinstance(obj, dict):
-            is_in_asset = "assets" in path
-            is_safe = is_in_asset or _is_text_name(obj.get("nm"))
-            if is_safe and obj.get("ty")=="gr" and _gfl(obj) and (_cdsh(obj)==0 or _cdsh(obj)>=3) and _cnsh(obj)>=3:
-                matched.append((obj, path))
-            for k, v in obj.items():
-                walk(v, path + (k,))
-        elif isinstance(obj, list):
-            for i, x in enumerate(obj):
-                walk(x, path + (i,))
-
-    walk(lottie)
-
-    filtered_matched = []
-    for gr1, p1 in matched:
-        is_ancestor = False
-        for gr2, p2 in matched:
-            if len(p1) < len(p2) and p2[:len(p1)] == p1:
-                is_ancestor = True
-                break
-        if not is_ancestor:
-            filtered_matched.append(gr1)
-
-    for gr in filtered_matched:
-        verts = _collect_path_verts(gr)
-        if verts:
-            xs=[v[0] for v in verts]; ys=[v[1] for v in verts]
-            w=max(xs)-min(xs); h=max(ys)-min(ys)+1e-9
-            if w>h*1.3 or w>0:
-                b = _verts_to_bounds(verts)
-                if b: return b
+    # Priority 3: Fallback structure
+    for el in get_all_elements(animation):
+        if isinstance(el, (Group, ShapeLayer)):
+            if hasattr(el, "name") and el.name and "user" in el.name.lower():
+                continue
+            shapes = el.shapes if hasattr(el, "shapes") else []
+            paths = [s for s in shapes if isinstance(s, Path)]
+            has_fill = any(isinstance(s, Fill) for s in shapes)
+            if 2 <= len(paths) <= 15 and has_fill:
+                return el
 
     return None
 
+def _get_textgroup_bounds(lottie: Any):
+    is_dict = isinstance(lottie, dict)
+    animation = Animation.load(lottie) if is_dict else lottie
+    
+    target = find_text_target(animation)
+    if not target:
+        return None
+        
+    if isinstance(target, TextLayer):
+        pos = target.transform.position.value
+        cx, cy = (pos[0], pos[1]) if (hasattr(pos, "__len__") and len(pos) >= 2) else (0.0, 0.0)
+        doc = None
+        if target.data and target.data.data and target.data.data.keyframes:
+            doc = target.data.data.keyframes[0].start
+        font_size = doc.font_size if doc else 50.0
+        max_width = 512.0
+        if doc and doc.wrap_size and doc.wrap_size[0] > 0:
+            max_width = doc.wrap_size[0]
+        elif target.composition and target.composition.width:
+            max_width = target.composition.width
+        return (cx - max_width / 2.0, cy - font_size / 2.0, cx + max_width / 2.0, cy + font_size / 2.0)
 
+    # Path-only bounds calculation to exclude background graphics/boxes
+    paths = []
+    def collect_paths(item):
+        if should_ignore(item):
+            return
+        if isinstance(item, Path):
+            paths.append(item)
+        elif hasattr(item, "shapes"):
+            for s in item.shapes:
+                collect_paths(s)
+    collect_paths(target)
+
+    bb = BoundingBox()
+    for p in paths:
+        if p.shape and p.shape.value:
+            bb.expand(p.bounding_box(0))
+    if not bb.isnull():
+        return (bb.x1, bb.y1, bb.x2, bb.y2)
+    return None
 
 def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     try:
@@ -927,286 +951,323 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
         from fontTools.pens.recordingPen import DecomposingRecordingPen
     except ImportError as e:
         import logging; logging.getLogger("JellyColor").error(f"fontTools: {e}")
-        return []
-    ft=TTFont(font_path); gs=ft.getGlyphSet(); cm=ft.getBestCmap() or {}
-    upm=ft["head"].unitsPerEm
-    os2=ft.get("OS/2")
-    cap_h=float(getattr(os2,"sCapHeight",0) or getattr(os2,"sTypoAscender",upm*0.72))
-    if cap_h<=0: cap_h=upm*0.72
-    sc=height/cap_h
-    total_adv=0.0; glyph_list=[]
+        return None
+
+    ft = TTFont(font_path)
+    gs = ft.getGlyphSet()
+    cm = ft.getBestCmap() or {}
+    upm = ft["head"].unitsPerEm
+    os2 = ft.get("OS/2")
+    cap_h = float(getattr(os2, "sCapHeight", 0) or getattr(os2, "sTypoAscender", upm * 0.72))
+    if cap_h <= 0:
+        cap_h = upm * 0.72
+
+    sc = height / cap_h
+    total_adv = 0.0
+    glyph_list = []
+
     for ch in text:
-        gn=cm.get(ord(ch))
+        gn = cm.get(ord(ch))
         if not gn or gn not in gs:
-            fb={ord("'"): [0x2019,0x02BC], ord("–"): [0x002D], ord("—"): [0x002D]}
-            for alt in fb.get(ord(ch),[]):
-                gn=cm.get(alt)
-                if gn and gn in gs: break
-            else: gn=None
-        adv=float(gs[gn].width) if gn and gn in gs else upm*0.35
-        glyph_list.append((gn,adv)); total_adv+=adv
-    if max_width and total_adv>0:
-        sc=min(sc,(max_width/(total_adv*sc)*sc)*0.92)
-    start_x=cx-total_adv*sc/2.0; base_y=cy+(cap_h/2.0)*sc
-    shapes=[]; cur_x=start_x
-    for gn,adv in glyph_list:
-        if gn is None: cur_x+=adv*sc; continue
-        pen=DecomposingRecordingPen(gs); gs[gn].draw(pen)
-        vs_,ii_,oo_=[],[],[]
-        def _close():
-            if vs_:
-                shapes.append({"ty":"sh","nm":"p","ks":{"a":0,"k":{"c":True,
-                    "v":[list(v) for v in vs_],"i":[list(v) for v in ii_],"o":[list(v) for v in oo_]}}})
-        for op,args in pen.value:
-            if op=="moveTo":
-                _close(); vs_.clear(); ii_.clear(); oo_.clear()
-                fx,fy=args[0]; lx=fx*sc+cur_x; ly=base_y-fy*sc
-                vs_.append([lx,ly]); ii_.append([0.,0.]); oo_.append([0.,0.])
-            elif op=="lineTo":
-                fx,fy=args[0]; lx=fx*sc+cur_x; ly=base_y-fy*sc
-                vs_.append([lx,ly]); ii_.append([0.,0.]); oo_.append([0.,0.])
-            elif op=="curveTo":
-                (c1x,c1y),(c2x,c2y),(ex,ey)=args
-                pvx,pvy=vs_[-1]
-                oo_[-1]=[c1x*sc+cur_x-pvx,base_y-c1y*sc-pvy]
-                nvx=ex*sc+cur_x; nvy=base_y-ey*sc
-                vs_.append([nvx,nvy]); ii_.append([c2x*sc+cur_x-nvx,base_y-c2y*sc-nvy]); oo_.append([0.,0.])
-            elif op=="qCurveTo":
-                pts=list(args); p0x,p0y=vs_[-1]
-                for qi in range(len(pts)-1):
-                    qcx,qcy=pts[qi]
-                    qex,qey=pts[qi+1] if qi==len(pts)-2 else ((pts[qi][0]+pts[qi+1][0])/2,(pts[qi][1]+pts[qi+1][1])/2)
-                    qcs=(qcx*sc+cur_x,base_y-qcy*sc); qes=(qex*sc+cur_x,base_y-qey*sc)
-                    c1s=(p0x+2/3*(qcs[0]-p0x),p0y+2/3*(qcs[1]-p0y))
-                    c2s=(qes[0]+2/3*(qcs[0]-qes[0]),qes[1]+2/3*(qcs[1]-qes[1]))
-                    oo_[-1]=[c1s[0]-p0x,c1s[1]-p0y]
-                    vs_.append(list(qes)); ii_.append([c2s[0]-qes[0],c2s[1]-qes[1]]); oo_.append([0.,0.])
-                    p0x,p0y=qes
-            elif op in ("endPath","closePath"):
-                _close(); vs_.clear(); ii_.clear(); oo_.clear()
-        _close(); cur_x+=adv*sc
-    return shapes
-
-
-
-def _replace_textgroup(lottie, new_shapes):
-    patched_any = False
-    
-    def _hfl(items): return any(x.get("ty")=="fl" for x in items)
-    
-    def _islc(item):
-        if item.get("ty")!="gr": return False
-        return not _hfl(item.get("it",[])) and not any(x.get("ty")=="st" for x in item.get("it",[]))
-        
-    def _patch(lst):
-        nonlocal patched_any
-        style=[x for x in lst if x.get("ty") not in ("sh","el","rc","sr") and not _islc(x)]
-        lst[:]=new_shapes+style
-        patched_any = True
-
-    # 1. Try to find by explicit names: "TextGroup", "Text", "text" (excluding username)
-    matched_named = []
-    def walk_named(obj, path=()):
-        if isinstance(obj, dict):
-            nm = obj.get("nm", "")
-            if isinstance(nm, str) and nm:
-                nm_lower = nm.lower()
-                # Exclude username groups
-                if "user" not in nm_lower:
-                    if obj.get("ty") == "gr" and ("textgroup" in nm_lower or nm_lower == "text"):
-                        matched_named.append((obj, path))
-            for k, v in obj.items():
-                walk_named(v, path + (k,))
-        elif isinstance(obj, list):
-            for i, x in enumerate(obj):
-                walk_named(x, path + (i,))
-
-    walk_named(lottie)
-    if matched_named:
-        # Filter ancestors
-        filtered = []
-        for gr1, p1 in matched_named:
-            is_ancestor = False
-            for gr2, p2 in matched_named:
-                if len(p1) < len(p2) and p2[:len(p1)] == p1:
-                    is_ancestor = True
+            fb = {ord("'"): [0x2019, 0x02BC], ord("–"): [0x002D], ord("—"): [0x002D]}
+            for alt in fb.get(ord(ch), []):
+                gn = cm.get(alt)
+                if gn and gn in gs:
                     break
-            if not is_ancestor:
-                filtered.append(gr1)
-        for gr in filtered:
-            _patch(gr.setdefault("it", []))
-            
-    if patched_any:
+            else:
+                gn = None
+        adv = float(gs[gn].width) if gn and gn in gs else upm * 0.35
+        glyph_list.append((gn, adv))
+        total_adv += adv
+
+    scale_y = sc * 100.0
+    if max_width and (total_adv * sc) > max_width:
+        scale_x = (max_width / total_adv) * 100.0
+    else:
+        scale_x = sc * 100.0
+
+    parent_group = Group()
+    parent_group.name = "JellyText_Container"
+
+    # Insert a local Fill before letters get prepended with EvenOdd rule to prevent "white circle of death"
+    fill_obj = Fill()
+    fill_obj.name = "Fill"
+    fill_obj.fill_rule = FillRule.EvenOdd
+    fill_obj.color.value = Color(1.0, 1.0, 1.0)
+    parent_group.shapes.insert(0, fill_obj)
+
+    start_x = -total_adv / 2.0
+    cur_x = 0.0
+
+    for char_idx, (gn, adv) in enumerate(glyph_list):
+        if gn is None:
+            cur_x += adv
+            continue
+
+        char_group = Group()
+        char_group.name = f"Char_{char_idx}"
+
+        pen = DecomposingRecordingPen(gs)
+        gs[gn].draw(pen)
+
+        current_bezier = None
+
+        def commit_path():
+            if current_bezier and len(current_bezier.vertices) > 0:
+                p_obj = Path()
+                p_obj.name = "p"
+                p_obj.shape.value = current_bezier
+                char_group.shapes.insert(0, p_obj)
+
+        for op, args in pen.value:
+            if op == "moveTo":
+                commit_path()
+                current_bezier = Bezier()
+                current_bezier.closed = True
+                fx, fy = args[0]
+                current_bezier.add_point(
+                    NVector(fx, cap_h / 2.0 - fy),
+                    NVector(0.0, 0.0),
+                    NVector(0.0, 0.0)
+                )
+            elif op == "lineTo":
+                if current_bezier is None:
+                    current_bezier = Bezier()
+                    current_bezier.closed = True
+                fx, fy = args[0]
+                current_bezier.add_point(
+                    NVector(fx, cap_h / 2.0 - fy),
+                    NVector(0.0, 0.0),
+                    NVector(0.0, 0.0)
+                )
+            elif op == "curveTo":
+                if current_bezier is None:
+                    current_bezier = Bezier()
+                    current_bezier.closed = True
+                (c1x, c1y), (c2x, c2y), (ex, ey) = args
+                pv = current_bezier.vertices[-1]
+                c1_lottie = NVector(c1x, cap_h / 2.0 - c1y)
+                current_bezier.out_tangents[-1] = c1_lottie - pv
+
+                ev_lottie = NVector(ex, cap_h / 2.0 - ey)
+                c2_lottie = NVector(c2x, cap_h / 2.0 - c2y)
+                current_bezier.add_point(
+                    ev_lottie,
+                    c2_lottie - ev_lottie,
+                    NVector(0.0, 0.0)
+                )
+            elif op == "qCurveTo":
+                if current_bezier is None:
+                    current_bezier = Bezier()
+                    current_bezier.closed = True
+                pts = list(args)
+                p0 = current_bezier.vertices[-1]
+
+                for qi in range(len(pts) - 1):
+                    qcx, qcy = pts[qi]
+                    qex, qey = pts[qi + 1] if qi == len(pts) - 2 else ((pts[qi][0] + pts[qi + 1][0]) / 2, (pts[qi][1] + pts[qi + 1][1]) / 2)
+
+                    qcs = NVector(qcx, cap_h / 2.0 - qcy)
+                    qes = NVector(qex, cap_h / 2.0 - qey)
+
+                    c1s = p0 + (qcs - p0) * (2.0 / 3.0)
+                    c2s = qes + (qcs - qes) * (2.0 / 3.0)
+
+                    current_bezier.out_tangents[-1] = c1s - p0
+                    current_bezier.add_point(
+                        qes,
+                        c2s - qes,
+                        NVector(0.0, 0.0)
+                    )
+                    p0 = qes
+            elif op in ("endPath", "closePath"):
+                if current_bezier:
+                    current_bezier.closed = True
+                    commit_path()
+                    current_bezier = None
+
+        commit_path()
+
+        char_group.transform.position.value = NVector(start_x + cur_x, 0.0)
+        parent_group.shapes.insert(0, char_group)
+
+        cur_x += adv
+
+    parent_group.transform.position.value = NVector(cx, cy)
+    parent_group.transform.scale.value = NVector(scale_x, scale_y)
+    
+    return parent_group
+
+def _replace_textgroup(animation, new_group):
+    target = find_text_target(animation)
+    if not target:
+        return False
+
+    if isinstance(target, TextLayer):
+        comp = target.composition
+        if not comp:
+            return False
+        new_layer = ShapeLayer()
+        new_layer.name = target.name or "Text Shape"
+        new_layer.in_point = target.in_point
+        new_layer.out_point = target.out_point
+        new_layer.parent_index = target.parent_index
+        if target.transform:
+            new_layer.transform = target.transform.clone()
+        new_layer.shapes = [new_group]
+        try:
+            idx = comp.layers.index(target)
+            comp.layers.insert(idx, new_layer)
+            comp.layers.remove(target)
+        except ValueError:
+            comp.add_layer(new_layer)
         return True
 
-    # 2. Try to find by shape layers containing "text" in name
-    def try_ll(layers, path_prefix="top"):
-        for layer in layers:
-            if layer.get("ty")!=4: continue
-            shapes=layer.get("shapes",[]); nm=layer.get("nm","")
-            if not isinstance(nm, str): continue
-            nm_lower = nm.lower()
-            if "user" in nm_lower: continue
-            n=sum(1 for s in shapes if s.get("ty")=="sh")
-            fl=any(s.get("ty")=="fl" for s in shapes)
-            is_safe = _is_text_name(nm) or ("assets" in path_prefix)
-            if is_safe and (("text" in nm_lower and n>=2 and fl) or (n>=3 and fl)):
-                _patch(shapes)
-
-    for ll, name in [(lottie.get("layers",[]), "top")]:
-        try_ll(ll, name)
-    for a in lottie.get("assets",[]):
-        try_ll(a.get("layers",[]), "assets")
-
-    if patched_any:
+    if isinstance(target, ShapeLayer):
+        target.shapes = [new_group]
         return True
 
-    # 3. Fallback heuristic (only if name matching failed)
-    def _cdsh(gr): return sum(1 for x in gr.get("it",[]) if x.get("ty")=="sh")
-    def _cnsh(gr):
-        n=0
-        for x in gr.get("it",[]):
-            n+=1 if x.get("ty")=="sh" else (_cnsh(x) if x.get("ty")=="gr" else 0)
-        return n
+    # Complete isolation: target's shapes are replaced by container + original transform
+    original_tr = next((s for s in target.shapes if isinstance(s, TransformShape)), None)
+    if not original_tr:
+        original_tr = TransformShape()
+    target.shapes = [new_group, original_tr]
+    return True
 
-    matched_heuristic = []
-    def walk_heuristic(obj, path=()):
-        if isinstance(obj, dict):
-            nm = obj.get("nm", "")
-            nm_lower = nm.lower() if isinstance(nm, str) else ""
-            is_in_asset = "assets" in path
-            is_safe = is_in_asset or _is_text_name(nm)
-            if is_safe and "user" not in nm_lower:
-                if obj.get("ty") == "gr" and _hfl(obj.get("it",[])):
-                    # Text placeholders like "emc" have between 3 and 12 shapes usually
-                    # Complex drawings like a car outline have many more
-                    num_shapes = _cnsh(obj)
-                    if (_cdsh(obj)==0 or _cdsh(obj)>=3) and 3 <= num_shapes <= 12:
-                        matched_heuristic.append((obj, path))
-            for k, v in obj.items():
-                walk_heuristic(v, path + (k,))
-        elif isinstance(obj, list):
-            for i, x in enumerate(obj):
-                walk_heuristic(x, path + (i,))
-
-    walk_heuristic(lottie)
-    if matched_heuristic:
-        filtered = []
-        for gr1, p1 in matched_heuristic:
-            is_ancestor = False
-            for gr2, p2 in matched_heuristic:
-                if len(p1) < len(p2) and p2[:len(p1)] == p1:
-                    is_ancestor = True
-                    break
-            if not is_ancestor:
-                filtered.append(gr1)
-        for gr in filtered:
-            _patch(gr.setdefault("it", []))
-
-    return patched_any
-
-
-
-def _find_username_bounds(lottie):
-    def walk(obj):
-        if isinstance(obj,dict):
-            if obj.get("ty")=="gr" and obj.get("nm")=="USERNAME":
-                b=_verts_to_bounds(_collect_path_verts(obj))
-                if b: return b,obj
-            for v in obj.values():
-                r=walk(v)
+def _find_username_bounds(animation):
+    def walk(item):
+        if isinstance(item, Group) and getattr(item, "name", "") == "USERNAME":
+            verts = []
+            def walk_sub(si):
+                if isinstance(si, Path) and si.shape and si.shape.value:
+                    verts.extend(si.shape.value.vertices)
+                elif hasattr(si, "shapes"):
+                    for s in si.shapes:
+                        walk_sub(s)
+            walk_sub(item)
+            if verts:
+                xs = [v[0] for v in verts]
+                ys = [v[1] for v in verts]
+                return (min(xs), min(ys), max(xs), max(ys)), item
+        if hasattr(item, "shapes"):
+            for s in item.shapes:
+                r = walk(s)
                 if r: return r
-        elif isinstance(obj,list):
-            for item in obj:
-                r=walk(item)
+        if hasattr(item, "layers"):
+            for l in item.layers:
+                r = walk(l)
                 if r: return r
         return None
-    return walk(lottie)
 
+    for l in animation.layers:
+        r = walk(l)
+        if r: return r
+    for asset in animation.assets:
+        if hasattr(asset, "layers"):
+            for l in asset.layers:
+                r = walk(l)
+                if r: return r
+    return None
 
-def _replace_username(lottie, new_text, font_path):
-    res=_find_username_bounds(lottie)
-    if not res: return False
-    bounds,grp=res; x1,y1,x2,y2=bounds
-    ns=_text_to_lottie_shapes(new_text,font_path,(x1+x2)/2,(y1+y2)/2,
-                               max(abs(y2-y1),1.0),max_width=max(abs(x2-x1),1.0))
-    if not ns: return False
-    items=grp.setdefault("it",[])
-    def _hfl(lst): return any(x.get("ty")=="fl" for x in lst)
-    style=[x for x in items if x.get("ty") not in ("sh","el","rc","sr")
-           and not (x.get("ty")=="gr" and not _hfl(x.get("it",[])))]
-    items[:]=ns+style; return True
+def _replace_username(animation, new_text, font_path):
+    res = _find_username_bounds(animation)
+    if not res:
+        return False
+    bounds, grp = res
+    x1, y1, x2, y2 = bounds
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    height = max(abs(y2 - y1), 1.0)
+    max_width = max(abs(x2 - x1), 1.0)
 
+    new_group = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width)
+    if not new_group:
+        return False
+
+    old_shapes = grp.shapes
+    preserved = []
+    for s in old_shapes:
+        if isinstance(s, TransformShape):
+            preserved.append(s)
+        elif not isinstance(s, (Path, Group)):
+            preserved.append(s)
+
+    grp.shapes = [new_group] + preserved
+    return True
 
 OLD_USERNAME = "@emojicreationbot"
 NEW_USERNAME = "@freecreateemoji"
 
+def _set_text_fill_color(lottie: Any, hex_color: str) -> None:
+    """Устанавливает цвет fill текстовых групп на hex_color."""
+    is_dict = isinstance(lottie, dict)
+    animation = Animation.load(lottie) if is_dict else lottie
 
-def _set_text_fill_color(lottie: dict, hex_color: str) -> None:
-    """Устанавливает цвет fill текстовых групп (TextGroup/Text) на hex_color.
-    Используется для контрастного текста: белый на тёмном фоне, чёрный на светлом.
-    """
     r, g, b = hex_to_rgb(hex_color)
-    nr, ng, nb = r / 255, g / 255, b / 255
+    nr, ng, nb = r / 255.0, g / 255.0, b / 255.0
+    color_obj = Color(nr, ng, nb)
 
-    def _is_text_group(obj):
-        if obj.get("ty") != "gr":
-            return False
-        nm = (obj.get("nm") or "").lower()
-        return "textgroup" in nm or nm == "text"
+    def walk(item):
+        if isinstance(item, Fill):
+            item.color.value = color_obj
+        elif hasattr(item, "shapes"):
+            for s in item.shapes:
+                walk(s)
+        elif hasattr(item, "layers"):
+            for l in item.layers:
+                walk(l)
 
-    def _set_fill(items):
-        for item in items:
-            if isinstance(item, dict) and item.get("ty") == "fl":
-                c = item.get("c", {})
-                if isinstance(c, dict):
-                    k = c.get("k")
-                    if isinstance(k, list) and len(k) >= 3 and isinstance(k[0], (int, float)):
-                        c["k"] = [nr, ng, nb] + k[3:]
-                    elif isinstance(k, list):
-                        for kf in k:
-                            if isinstance(kf, dict):
-                                s = kf.get("s")
-                                if isinstance(s, list) and len(s) >= 3:
-                                    kf["s"] = [nr, ng, nb] + s[3:]
-                                e = kf.get("e")
-                                if isinstance(e, list) and len(e) >= 3:
-                                    kf["e"] = [nr, ng, nb] + e[3:]
+    walk(animation)
 
-    def _walk(obj):
-        if isinstance(obj, dict):
-            if _is_text_group(obj):
-                _set_fill(obj.get("it", []))
-            for v in obj.values():
-                _walk(v)
-        elif isinstance(obj, list):
-            for x in obj:
-                _walk(x)
-
-    _walk(lottie)
-
+    if is_dict:
+        lottie.clear()
+        lottie.update(animation.to_dict())
 
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if not font_path:
-        font_path=_ensure_font()
-    if not font_path: return False
-    changed=False
-    bounds=_get_textgroup_bounds(lottie)
+        font_path = _ensure_font()
+    if not font_path:
+        return False
+
+    animation = Animation.load(lottie)
+    changed = False
+
+    bounds = _get_textgroup_bounds(animation)
     if bounds:
-        x1,y1,x2,y2=bounds; cx=(x1+x2)/2; cy=(y1+y2)/2
-        ns=_text_to_lottie_shapes(new_text,font_path,cx,cy,max(abs(y2-y1),5.)*1.15,max_width=max(abs(x2-x1),5.)*1.15)
-        if ns and _replace_textgroup(lottie,ns): changed=True
-    if _find_username_bounds(lottie):
-        if _replace_username(lottie,NEW_USERNAME,font_path): changed=True
+        x1, y1, x2, y2 = bounds
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+        height = max(abs(y2 - y1), 5.0)
+        max_width = max(abs(x2 - x1), 5.0)
+
+        new_group = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width)
+        if new_group:
+            # Apply slight skew for car templates if requested
+            is_car_template = any(
+                hasattr(l, "name") and l.name and any(x in l.name.lower() for x in ("fara", "kapot", "resh_lines"))
+                for l in animation.layers
+            )
+            if is_car_template:
+                new_group.transform.skew.value = -10.0
+                
+            if _replace_textgroup(animation, new_group):
+                changed = True
+
+    if _find_username_bounds(animation):
+        if _replace_username(animation, NEW_USERNAME, font_path):
+            changed = True
+
+    if changed:
+        lottie.clear()
+        lottie.update(animation.to_dict())
+
     return changed
 
-
 def replace_text_in_tgs(tgs_bytes: bytes, old_text: str, new_text: str, font_path: str = None) -> bytes:
-    raw=gzip.decompress(tgs_bytes); lottie=json.loads(raw.decode("utf-8"))
+    raw = gzip.decompress(tgs_bytes)
+    lottie = json.loads(raw.decode("utf-8"))
     modify_lottie(lottie, new_text, font_path)
     return compress_tgs(lottie)
-
-
 # ─── Recolor helpers ──────────────────────────────────────────────────────────
 
 def _recolor_document_sync(data: bytes, mime: str, hex_color: str, is_emoji: bool) -> io.BytesIO:
