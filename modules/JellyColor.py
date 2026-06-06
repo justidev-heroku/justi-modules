@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 7, 1)
+__version__ = (3, 7, 2)
 
 import asyncio
 import glob
