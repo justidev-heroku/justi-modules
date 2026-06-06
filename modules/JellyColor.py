@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 7, 0)
+__version__ = (3, 7, 1)
 
 import asyncio
 import glob
@@ -1184,7 +1184,8 @@ async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, i
     is_tgs=mime=="application/x-tgsticker"
     mt="application/x-tgsticker" if is_tgs else "image/webp"
     fn="sticker.tgs" if is_tgs else "sticker.webp"
-    extra_attrs=[] if is_tgs else [types.DocumentAttributeImageSize(w=512,h=512)]
+    sz=100 if is_emoji else 512
+    extra_attrs=[] if is_tgs else [types.DocumentAttributeImageSize(w=sz,h=sz)]
     media=types.InputMediaUploadedDocument(
         file=uploaded,mime_type=mt,
         attributes=[types.DocumentAttributeFilename(file_name=fn),attr]+extra_attrs,
@@ -1935,7 +1936,7 @@ class JellyColorMod(loader.Module):
                 buf=io.BytesIO(patched); buf.name="sticker.tgs"
             else:
                 def _process_img():
-                    img=Image.open(io.BytesIO(raw)).convert("RGBA").resize((512,512),Image.LANCZOS)
+                    img=Image.open(io.BytesIO(raw)).convert("RGBA").resize((100,100),Image.LANCZOS)
                     if gradient:
                         img=tint_image_gradient(img, gradient["colors"], gradient.get("dir", "d"))
                     elif color and not color.startswith("grad:"):
