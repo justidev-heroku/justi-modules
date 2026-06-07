@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.2.2                     ║
+# ║                        🎨 JellyColor v4.2.3                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.2.2: выбор при существовании пака, масштабируемый текст      ║
+# ║  v4.2.3: выбор при существовании пака, масштабируемый текст      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,7 +31,7 @@
 #
 # modification: JellyColor pack exists handling, scalable text, and version bump
 
-__version__ = (4, 2, 2)
+__version__ = (4, 2, 3)
 
 import asyncio
 import glob
@@ -1834,7 +1834,7 @@ class JellyColorMod(loader.Module):
         # Check if pack already exists
         exists = False
         try:
-            await self._client(functions.stickers.GetStickerSetRequest(
+            await self._client(functions.messages.GetStickerSetRequest(
                 stickerset=types.InputStickerSetShortName(short_name=pname), hash=0
             ))
             exists = True
@@ -2171,7 +2171,7 @@ class JellyColorMod(loader.Module):
         # Check if pack already exists
         exists = False
         try:
-            await self._client(functions.stickers.GetStickerSetRequest(
+            await self._client(functions.messages.GetStickerSetRequest(
                 stickerset=types.InputStickerSetShortName(short_name=pname), hash=0
             ))
             exists = True
