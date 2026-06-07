@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.0.0                     ║
+# ║                        🎨 JellyColor v4.1.0                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.0.0: обновление паков шаблонов, плейсхолдера и логирования   ║
+# ║  v4.1.0: оптимизация скорости (orjson, 1D-градиенты, быстрое сжатие TGS) ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -27,11 +27,11 @@
 # SOFTWARE.
 #
 # meta developer: @justidev
-# requires: Pillow fonttools
+# requires: Pillow fonttools orjson
 #
-# modification: JellyColor update template sets, placeholder, and error logging
+# modification: JellyColor speed optimizations (orjson, 1D-gradients, fast TGS compression)
 
-__version__ = (4, 0, 0)
+__version__ = (4, 1, 0)
 
 import asyncio
 import glob
@@ -73,6 +73,28 @@ except ImportError:
 from .. import loader, utils
 
 logger = logging.getLogger("JellyColor")
+
+try:
+    import orjson
+    HAS_ORJSON = True
+except ImportError:
+    HAS_ORJSON = False
+
+
+def json_loads(data: bytes) -> dict:
+    if HAS_ORJSON:
+        return orjson.loads(data)
+    return json.loads(data.decode("utf-8") if isinstance(data, bytes) else data)
+
+
+def json_dumps(obj: dict, indent: bool = False) -> bytes:
+    if HAS_ORJSON:
+        if indent:
+            return orjson.dumps(obj, option=orjson.OPT_INDENT_2)
+        return orjson.dumps(obj)
+    if indent:
+        return json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+    return json.dumps(obj, separators=(",", ":")).encode("utf-8")
 
 
 PRESET_COLORS: Dict[str, str] = {
@@ -176,25 +198,14 @@ def tint_image(img: Image.Image, hex_color: str) -> Image.Image:
 
 
 def create_gradient_image(width: int, height: int, colors_hex: list, direction: str) -> Image.Image:
-    tw, th = 64, 64
-    img = Image.new("RGB", (tw, th))
-    pixels = []
     n = len(colors_hex)
     rgbs = [hex_to_rgb(c) for c in colors_hex]
-    
-    for y in range(th):
+
+    if direction == "h":
+        tw, th = 64, 1
+        pixels = []
         for x in range(tw):
-            if direction == "h":
-                t = x / (tw - 1)
-            elif direction == "v":
-                t = y / (th - 1)
-            elif direction in ("d", "dl"):
-                t = (x + y) / (tw + th - 2)
-            elif direction == "dr":
-                t = ((tw - 1 - x) + y) / (tw + th - 2)
-            else:
-                t = (x + y) / (tw + th - 2)
-            
+            t = x / (tw - 1)
             t = max(0.0, min(1.0, t))
             scaled = t * (n - 1)
             idx = min(int(scaled), n - 2)
@@ -205,9 +216,54 @@ def create_gradient_image(width: int, height: int, colors_hex: list, direction: 
             g = int(g1 + (g2 - g1) * f)
             b = int(b1 + (b2 - b1) * f)
             pixels.append((r, g, b))
-            
-    img.putdata(pixels)
-    return img.resize((width, height), Image.BILINEAR)
+        img = Image.new("RGB", (tw, th))
+        img.putdata(pixels)
+        return img.resize((width, height), Image.BILINEAR)
+
+    elif direction == "v":
+        tw, th = 1, 64
+        pixels = []
+        for y in range(th):
+            t = y / (th - 1)
+            t = max(0.0, min(1.0, t))
+            scaled = t * (n - 1)
+            idx = min(int(scaled), n - 2)
+            f = scaled - idx
+            r1, g1, b1 = rgbs[idx]
+            r2, g2, b2 = rgbs[idx + 1]
+            r = int(r1 + (r2 - r1) * f)
+            g = int(g1 + (g2 - g1) * f)
+            b = int(b1 + (b2 - b1) * f)
+            pixels.append((r, g, b))
+        img = Image.new("RGB", (tw, th))
+        img.putdata(pixels)
+        return img.resize((width, height), Image.BILINEAR)
+
+    else:
+        tw, th = 64, 64
+        pixels = []
+        for y in range(th):
+            for x in range(tw):
+                if direction in ("d", "dl"):
+                    t = (x + y) / (tw + th - 2)
+                elif direction == "dr":
+                    t = ((tw - 1 - x) + y) / (tw + th - 2)
+                else:
+                    t = (x + y) / (tw + th - 2)
+                
+                t = max(0.0, min(1.0, t))
+                scaled = t * (n - 1)
+                idx = min(int(scaled), n - 2)
+                f = scaled - idx
+                r1, g1, b1 = rgbs[idx]
+                r2, g2, b2 = rgbs[idx + 1]
+                r = int(r1 + (r2 - r1) * f)
+                g = int(g1 + (g2 - g1) * f)
+                b = int(b1 + (b2 - b1) * f)
+                pixels.append((r, g, b))
+        img = Image.new("RGB", (tw, th))
+        img.putdata(pixels)
+        return img.resize((width, height), Image.BILINEAR)
 
 
 def tint_image_gradient(img: Image.Image, colors_hex: list, direction: str) -> Image.Image:
@@ -722,35 +778,43 @@ async def download_cached(client, doc) -> bytes:
 # ─── TGS size guard ───────────────────────────────────────────────────────────
 
 def compress_tgs(lottie: dict) -> bytes:
-    raw = json.dumps(lottie, separators=(",", ":")).encode("utf-8")
-    compressed = gzip.compress(raw, compresslevel=9)
-    if len(compressed) > MAX_TGS_SIZE:
-        def _strip_names(obj):
-            if isinstance(obj, dict):
-                obj.pop("nm", None)
-                obj.pop("mn", None)
-                for v in obj.values():
-                    _strip_names(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    _strip_names(item)
-        _strip_names(lottie)
-        raw = json.dumps(lottie, separators=(",", ":")).encode("utf-8")
-        compressed = gzip.compress(raw, compresslevel=9)
+    raw = json_dumps(lottie)
+    if len(raw) < 150 * 1024:
+        return gzip.compress(raw, compresslevel=6)
 
+    compressed = gzip.compress(raw, compresslevel=6)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
+
+    def _strip_names(obj):
+        if isinstance(obj, dict):
+            obj.pop("nm", None)
+            obj.pop("mn", None)
+            for v in obj.values():
+                _strip_names(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _strip_names(item)
+    _strip_names(lottie)
+    raw = json_dumps(lottie)
+    compressed = gzip.compress(raw, compresslevel=6)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
+
+    def _round_floats(obj, precision=2):
+        if isinstance(obj, float):
+            return round(obj, precision) if math.isfinite(obj) else obj
+        elif isinstance(obj, dict):
+            for k, v in list(obj.items()):
+                obj[k] = _round_floats(v, precision)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                obj[i] = _round_floats(v, precision)
+        return obj
+    _round_floats(lottie, 2)
+    raw = json_dumps(lottie)
+    compressed = gzip.compress(raw, compresslevel=6)
     if len(compressed) > MAX_TGS_SIZE:
-        def _round_floats(obj, precision=2):
-            if isinstance(obj, float):
-                return round(obj, precision) if math.isfinite(obj) else obj
-            elif isinstance(obj, dict):
-                for k, v in list(obj.items()):
-                    obj[k] = _round_floats(v, precision)
-            elif isinstance(obj, list):
-                for i, v in enumerate(obj):
-                    obj[i] = _round_floats(v, precision)
-            return obj
-        _round_floats(lottie, 2)
-        raw = json.dumps(lottie, separators=(",", ":")).encode("utf-8")
         compressed = gzip.compress(raw, compresslevel=9)
 
     return compressed
@@ -1243,7 +1307,7 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
 
 
 def replace_text_in_tgs(tgs_bytes: bytes, old_text: str, new_text: str, font_path: str = None) -> bytes:
-    raw=gzip.decompress(tgs_bytes); lottie=json.loads(raw.decode("utf-8"))
+    raw=gzip.decompress(tgs_bytes); lottie=json_loads(raw)
     modify_lottie(lottie, new_text, font_path)
     return compress_tgs(lottie)
 
@@ -1252,7 +1316,7 @@ def replace_text_in_tgs(tgs_bytes: bytes, old_text: str, new_text: str, font_pat
 
 def _recolor_document_sync(data: bytes, mime: str, hex_color: str, is_emoji: bool) -> io.BytesIO:
     if mime=="application/x-tgsticker":
-        lottie=json.loads(gzip.decompress(data))
+        lottie=json_loads(gzip.decompress(data))
         buf=io.BytesIO(compress_tgs(tint_lottie(lottie,hex_color))); buf.name="sticker.tgs"
     else:
         sz=100 if is_emoji else 512
@@ -1272,7 +1336,7 @@ async def recolor_document(client, doc, hex_color: str, is_emoji: bool = False) 
 
 def _recolor_document_gradient_sync(data: bytes, mime: str, gradient: dict, is_emoji: bool) -> io.BytesIO:
     if mime=="application/x-tgsticker":
-        lottie=json.loads(gzip.decompress(data))
+        lottie=json_loads(gzip.decompress(data))
         apply_gradient_lottie(lottie,gradient)
         buf=io.BytesIO(compress_tgs(lottie)); buf.name="sticker.tgs"
     else:
@@ -2021,7 +2085,7 @@ class JellyColorMod(loader.Module):
             loop = asyncio.get_event_loop()
             if mime=="application/x-tgsticker":
                 def _process_tgs():
-                    lottie_obj = json.loads(gzip.decompress(raw).decode("utf-8"))
+                    lottie_obj = json_loads(gzip.decompress(raw))
                     modify_lottie(lottie_obj, txt, s.get("font_path"))
                     if gradient:
                         apply_gradient_lottie(lottie_obj, gradient)
@@ -2229,7 +2293,7 @@ class JellyColorMod(loader.Module):
         """Экспорт статистики в JSON"""
         stats=self.db.get("JellyColor","stats",[])
         if not stats: await utils.answer(message,pe("ℹ️",PE["info"])+" Пустая статистика."); return
-        buf=io.BytesIO(json.dumps(stats,ensure_ascii=False,indent=2).encode()); buf.name="jelly_stats.json"; buf.seek(0)
+        buf=io.BytesIO(json_dumps(stats, indent=True)); buf.name="jelly_stats.json"; buf.seek(0)
         await self._client.send_file(message.chat_id,buf,
             caption=pe("📤",PE["export"])+f" Экспорт — <b>{len(stats)}</b> записей",parse_mode="HTML")
         await message.delete()
@@ -2332,14 +2396,14 @@ class JellyColorMod(loader.Module):
         lines=[f"id: {eid}",f"mime: {mime}",f"size: {len(raw)} bytes"]
         if mime=="application/x-tgsticker":
             try:
-                lottie=json.loads(gzip.decompress(raw))
+                lottie=json_loads(gzip.decompress(raw))
                 lines+=[f"w={lottie.get('w')} h={lottie.get('h')} fr={lottie.get('fr')} v={lottie.get('v')}",
                         f"layers: {len(lottie.get('layers',[]))}",
                         f"assets: {len(lottie.get('assets',[]))}",
                         f"text_bounds: {_get_textgroup_bounds(lottie)}",
                         f"dominant_color: {get_dominant_lottie_color(lottie)}",
                         "\n--- FULL JSON ---",
-                        json.dumps(lottie,indent=2,ensure_ascii=False)]
+                        json_dumps(lottie, indent=True).decode("utf-8")]
             except Exception as e:
                 logger.exception("Failed to decompress and parse Lottie in .jdump command")
                 lines.append(f"ERROR: {e}")
