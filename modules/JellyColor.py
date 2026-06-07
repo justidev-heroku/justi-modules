@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools lottie
 
-__version__ = (3, 8, 5)
+__version__ = (3, 8, 6)
 
 import asyncio
 import glob
@@ -909,7 +909,7 @@ def find_text_targets(animation):
         return text_layers
 
     # Phase 2: Named groups/layers and ShapeLayers with direct paths/fills
-    keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"]
+    keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo", "@"]
     named_targets = []
     for el in get_all_elements(animation):
         if isinstance(el, Group):
