@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools lottie
 
-__version__ = (3, 8, 4)
+__version__ = (3, 8, 5)
 
 import asyncio
 import glob
