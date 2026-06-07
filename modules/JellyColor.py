@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v3.8                       ║
+# ║                        🎨 JellyColor v3.8.1                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v3.8: контрастный текст, фикс 100x100 emoji, градиенты          ║
+# ║  v3.8.1: убрана авто-смена цвета текста (контрастность)           ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 8, 0)
+__version__ = (3, 8, 1)
 
 import asyncio
 import glob
@@ -151,26 +151,7 @@ def rgb_to_hex(r: int, g: int, b: int) -> str:
     return "#{:02X}{:02X}{:02X}".format(r, g, b)
 
 
-def _luminance(hex_color: str) -> float:
-    """Вычисляет относительную яркость цвета (0=чёрный, 1=белый)."""
-    r, g, b = hex_to_rgb(hex_color)
-    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
 
-
-def _contrast_text_color(hex_color: str) -> str:
-    """Возвращает '#FFFFFF' для тёмных фонов, '#000000' для светлых."""
-    return "#FFFFFF" if _luminance(hex_color) < 0.5 else "#000000"
-
-
-def _dominant_color_from_gradient(colors: list) -> str:
-    """Средний цвет градиента для определения контраста."""
-    if not colors:
-        return "#000000"
-    rs, gs, bs = [], [], []
-    for c in colors:
-        r, g, b = hex_to_rgb(c)
-        rs.append(r); gs.append(g); bs.append(b)
-    return rgb_to_hex(sum(rs)//len(rs), sum(gs)//len(gs), sum(bs)//len(bs))
 
 
 # ─── Image tinting ────────────────────────────────────────────────────────────
@@ -1136,48 +1117,7 @@ OLD_USERNAME = "@emojicreationbot"
 NEW_USERNAME = "@freecreateemoji"
 
 
-def _set_text_fill_color(lottie: dict, hex_color: str) -> None:
-    """Устанавливает цвет fill текстовых групп (TextGroup/Text) на hex_color.
-    Используется для контрастного текста: белый на тёмном фоне, чёрный на светлом.
-    """
-    r, g, b = hex_to_rgb(hex_color)
-    nr, ng, nb = r / 255, g / 255, b / 255
 
-    def _is_text_group(obj):
-        if obj.get("ty") != "gr":
-            return False
-        nm = (obj.get("nm") or "").lower()
-        return "textgroup" in nm or nm == "text"
-
-    def _set_fill(items):
-        for item in items:
-            if isinstance(item, dict) and item.get("ty") == "fl":
-                c = item.get("c", {})
-                if isinstance(c, dict):
-                    k = c.get("k")
-                    if isinstance(k, list) and len(k) >= 3 and isinstance(k[0], (int, float)):
-                        c["k"] = [nr, ng, nb] + k[3:]
-                    elif isinstance(k, list):
-                        for kf in k:
-                            if isinstance(kf, dict):
-                                s = kf.get("s")
-                                if isinstance(s, list) and len(s) >= 3:
-                                    kf["s"] = [nr, ng, nb] + s[3:]
-                                e = kf.get("e")
-                                if isinstance(e, list) and len(e) >= 3:
-                                    kf["e"] = [nr, ng, nb] + e[3:]
-
-    def _walk(obj):
-        if isinstance(obj, dict):
-            if _is_text_group(obj):
-                _set_fill(obj.get("it", []))
-            for v in obj.values():
-                _walk(v)
-        elif isinstance(obj, list):
-            for x in obj:
-                _walk(x)
-
-    _walk(lottie)
 
 
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
@@ -2001,14 +1941,8 @@ class JellyColorMod(loader.Module):
                     modify_lottie(lottie_obj, txt, s.get("font_path"))
                     if gradient:
                         apply_gradient_lottie(lottie_obj, gradient)
-                        tc=_contrast_text_color(_dominant_color_from_gradient(gradient["colors"]))
                     elif color:
                         tint_lottie(lottie_obj, color)
-                        tc=_contrast_text_color(color)
-                    else:
-                        tc=None
-                    if tc:
-                        _set_text_fill_color(lottie_obj, tc)
                     return compress_tgs(lottie_obj)
                 patched = await loop.run_in_executor(None, _process_tgs)
                 buf=io.BytesIO(patched); buf.name="sticker.tgs"
