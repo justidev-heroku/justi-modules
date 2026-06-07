@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.1.0                     ║
+# ║                        🔮 JellyParser v0.1.1                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║                  v0.1.0 beta: первый релиз                       ║
+# ║                  v0.1.1: замена текста на jelly                  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -27,9 +27,10 @@
 # SOFTWARE.
 #
 # meta developer: @justidev
-# requires: Pillow
+# requires: Pillow fonttools
 
 import asyncio
+import glob
 import gzip
 import io
 import json
@@ -37,14 +38,22 @@ import logging
 import os
 import re
 import time
+import urllib.request
 from telethon import functions, types
 from telethon.tl.types import DocumentAttributeCustomEmoji, DocumentAttributeSticker, Message
 
 from .. import loader, utils
 
+try:
+    from fontTools.ttLib import TTFont
+    from fontTools.pens.recordingPen import DecomposingRecordingPen
+    HAS_FONTTOOLS = True
+except ImportError:
+    HAS_FONTTOOLS = False
+
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 1, 0)
+__version__ = (0, 1, 1)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -67,6 +76,27 @@ PE = {
 CACHE_DIR = "/tmp/jelly_cache"
 CONCURRENCY = 12
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+TEMPLATE_PLACEHOLDER = "emc"
+
+_FONT_SEARCH = [
+    "/usr/share/fonts/truetype/comfortaa/Comfortaa-Bold.ttf",
+    "/usr/share/fonts/truetype/roboto/Roboto-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+    "/usr/local/share/fonts/NotoSans-Bold.ttf",
+]
+_CACHED_FONT_PATH = "/tmp/jelly_color_comfortaa.ttf"
+_FONT_CDN_URL = (
+    "https://raw.githubusercontent.com/googlefonts/comfortaa/master/"
+    "fonts/TTF/Comfortaa-Bold.ttf"
+)
 
 
 def pe(emoji: str, eid: str) -> str:
@@ -92,6 +122,33 @@ async def download_cached(client, doc) -> bytes:
     except Exception:
         pass
     return data
+
+
+def _find_font():
+    for p in _FONT_SEARCH:
+        if os.path.exists(p): return p
+    for p in glob.glob("/usr/share/fonts/**/*Bold*.ttf", recursive=True): return p
+    found = glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
+    return found[0] if found else None
+
+
+def _ensure_font():
+    log = logging.getLogger("JellyParser")
+    comfortaa_system_path = _FONT_SEARCH[0]
+    if os.path.exists(comfortaa_system_path):
+        return comfortaa_system_path
+    if os.path.exists(_CACHED_FONT_PATH) and os.path.getsize(_CACHED_FONT_PATH) > 50000:
+        return _CACHED_FONT_PATH
+    log.info("_ensure_font: downloading from CDN...")
+    try:
+        urllib.request.urlretrieve(_FONT_CDN_URL, _CACHED_FONT_PATH)
+        if os.path.exists(_CACHED_FONT_PATH) and os.path.getsize(_CACHED_FONT_PATH) > 50000:
+            return _CACHED_FONT_PATH
+    except Exception as e:
+        log.error(f"_ensure_font: download failed: {e}")
+    p = _find_font()
+    if p: return p
+    return None
 
 
 def _collect_path_verts(obj):
@@ -193,6 +250,195 @@ def _get_textgroup_bounds(lottie):
                 if b: return b
 
     return None
+
+
+def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
+    if not HAS_FONTTOOLS:
+        logger.error("fontTools: package not found")
+        return []
+    ft=TTFont(font_path); gs=ft.getGlyphSet(); cm=ft.getBestCmap() or {}
+    upm=ft["head"].unitsPerEm
+    os2=ft.get("OS/2")
+    cap_h=float(getattr(os2,"sCapHeight",0) or getattr(os2,"sTypoAscender",upm*0.72))
+    if cap_h<=0: cap_h=upm*0.72
+    sc=height/cap_h
+    total_adv=0.0; glyph_list=[]
+    for ch in text:
+        gn=cm.get(ord(ch))
+        if not gn or gn not in gs:
+            fb={ord("'"): [0x2019,0x02BC], ord("–"): [0x002D], ord("—"): [0x002D]}
+            for alt in fb.get(ord(ch),[]):
+                gn=cm.get(alt)
+                if gn and gn in gs: break
+            else: gn=None
+        adv=float(gs[gn].width) if gn and gn in gs else upm*0.35
+        glyph_list.append((gn,adv)); total_adv+=adv
+    if max_width and total_adv>0:
+        sc=min(sc,(max_width/(total_adv*sc)*sc)*0.92)
+    start_x=cx-total_adv*sc/2.0; base_y=cy+(cap_h/2.0)*sc
+    shapes=[]; cur_x=start_x
+    for gn,adv in glyph_list:
+        if gn is None: cur_x+=adv*sc; continue
+        pen=DecomposingRecordingPen(gs); gs[gn].draw(pen)
+        vs_,ii_,oo_=[],[],[]
+        def _close():
+            if vs_:
+                shapes.append({"ty":"sh","nm":"p","ks":{"a":0,"k":{"c":True,
+                    "v":[list(v) for v in vs_],"i":[list(v) for v in ii_],"o":[list(v) for v in oo_]}}})
+        for op,args in pen.value:
+            if op=="moveTo":
+                _close(); vs_.clear(); ii_.clear(); oo_.clear()
+                fx,fy=args[0]; lx=fx*sc+cur_x; ly=base_y-fy*sc
+                vs_.append([lx,ly]); ii_.append([0.,0.]); oo_.append([0.,0.])
+            elif op=="lineTo":
+                fx,fy=args[0]; lx=fx*sc+cur_x; ly=base_y-fy*sc
+                vs_.append([lx,ly]); ii_.append([0.,0.]); oo_.append([0.,0.])
+            elif op=="curveTo":
+                (c1x,c1y),(c2x,c2y),(ex,ey)=args
+                pvx,pvy=vs_[-1]
+                oo_[-1]=[c1x*sc+cur_x-pvx,base_y-c1y*sc-pvy]
+                nvx=ex*sc+cur_x; nvy=base_y-ey*sc
+                vs_.append([nvx,nvy]); ii_.append([c2x*sc+cur_x-nvx,base_y-c2y*sc-nvy]); oo_.append([0.,0.])
+            elif op=="qCurveTo":
+                pts=list(args); p0x,p0y=vs_[-1]
+                for qi in range(len(pts)-1):
+                    qcx,qcy=pts[qi]
+                    qex,qey=pts[qi+1] if qi==len(pts)-2 else ((pts[qi][0]+pts[qi+1][0])/2,(pts[qi][1]+pts[qi+1][1])/2)
+                    qcs=(qcx*sc+cur_x,base_y-qcy*sc); qes=(qex*sc+cur_x,base_y-qey*sc)
+                    c1s=(p0x+2/3*(qcs[0]-p0x),p0y+2/3*(qcs[1]-p0y))
+                    c2s=(qes[0]+2/3*(qcs[0]-qes[0]),qes[1]+2/3*(qcs[1]-qes[1]))
+                    oo_[-1]=[c1s[0]-p0x,c1s[1]-p0y]
+                    vs_.append(list(qes)); ii_.append([c2s[0]-qes[0],c2s[1]-qes[1]]); oo_.append([0.,0.])
+                    p0x,p0y=qes
+            elif op in ("endPath","closePath"):
+                _close(); vs_.clear(); ii_.clear(); oo_.clear()
+        _close(); cur_x+=adv*sc
+    return shapes
+
+
+def _replace_textgroup(lottie, new_shapes):
+    patched_any = False
+    
+    def _hfl(items): return any(x.get("ty")=="fl" for x in items)
+    
+    def _islc(item):
+        if item.get("ty")!="gr": return False
+        return not _hfl(item.get("it",[])) and not any(x.get("ty")=="st" for x in item.get("it",[]))
+        
+    def _patch(lst):
+        nonlocal patched_any
+        style=[x for x in lst if x.get("ty") not in ("sh","el","rc","sr") and not _islc(x)]
+        lst[:]=new_shapes+style
+        patched_any = True
+
+    # 1. Try to find by explicit names: "TextGroup", "Text", "text" (excluding username)
+    matched_named = []
+    def walk_named(obj, path=()):
+        if isinstance(obj, dict):
+            nm = obj.get("nm", "")
+            if isinstance(nm, str) and nm:
+                nm_lower = nm.lower()
+                if "user" not in nm_lower:
+                    if obj.get("ty") == "gr" and ("textgroup" in nm_lower or nm_lower == "text"):
+                        matched_named.append((obj, path))
+            for k, v in obj.items():
+                walk_named(v, path + (k,))
+        elif isinstance(obj, list):
+            for i, x in enumerate(obj):
+                walk_named(x, path + (i,))
+
+    walk_named(lottie)
+    if matched_named:
+        filtered = []
+        for gr1, p1 in matched_named:
+            is_ancestor = False
+            for gr2, p2 in matched_named:
+                if len(p1) < len(p2) and p2[:len(p1)] == p1:
+                    is_ancestor = True
+                    break
+            if not is_ancestor:
+                filtered.append(gr1)
+        for gr in filtered:
+            _patch(gr.setdefault("it", []))
+            
+    if patched_any:
+        return True
+
+    # 2. Try to find by shape layers containing "text" in name
+    def try_ll(layers):
+        for layer in layers:
+            if layer.get("ty")!=4: continue
+            shapes=layer.get("shapes",[]); nm=layer.get("nm","")
+            if not isinstance(nm, str): continue
+            nm_lower = nm.lower()
+            if "user" in nm_lower: continue
+            n=sum(1 for s in shapes if s.get("ty")=="sh")
+            fl=any(s.get("ty")=="fl" for s in shapes)
+            if ("text" in nm_lower and n>=2 and fl) or (n>=3 and fl):
+                _patch(shapes)
+
+    for ll in [lottie.get("layers",[])]+[a.get("layers",[]) for a in lottie.get("assets",[])]:  
+        try_ll(ll)
+
+    if patched_any:
+        return True
+
+    # 3. Fallback heuristic
+    def _cdsh(gr): return sum(1 for x in gr.get("it",[]) if x.get("ty")=="sh")
+    def _cnsh(gr):
+        n=0
+        for x in gr.get("it",[]):
+            n+=1 if x.get("ty")=="sh" else (_cnsh(x) if x.get("ty")=="gr" else 0)
+        return n
+
+    matched_heuristic = []
+    def walk_heuristic(obj, path=()):
+        if isinstance(obj, dict):
+            nm = obj.get("nm", "")
+            nm_lower = nm.lower() if isinstance(nm, str) else ""
+            if "user" not in nm_lower:
+                if obj.get("ty") == "gr" and any(x.get("ty")=="fl" for x in obj.get("it",[])):
+                    num_shapes = _cnsh(obj)
+                    if (_cdsh(obj)==0 or _cdsh(obj)>=3) and 3 <= num_shapes <= 12:
+                        matched_heuristic.append((obj, path))
+            for k, v in obj.items():
+                walk_heuristic(v, path + (k,))
+        elif isinstance(obj, list):
+            for i, x in enumerate(obj):
+                walk_heuristic(x, path + (i,))
+
+    walk_heuristic(lottie)
+    if matched_heuristic:
+        filtered = []
+        for gr1, p1 in matched_heuristic:
+            is_ancestor = False
+            for gr2, p2 in matched_heuristic:
+                if len(p1) < len(p2) and p2[:len(p1)] == p1:
+                    is_ancestor = True
+                    break
+            if not is_ancestor:
+                filtered.append(gr1)
+        for gr in filtered:
+            _patch(gr.setdefault("it", []))
+
+    return patched_any
+
+
+def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
+    if not font_path:
+        font_path = _ensure_font()
+    if not font_path:
+        return False
+    changed = False
+    bounds = _get_textgroup_bounds(lottie)
+    if bounds:
+        x1, y1, x2, y2 = bounds
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        ns = _text_to_lottie_shapes(new_text, font_path, cx, cy, max(abs(y2 - y1), 5.), max_width=max(abs(x2 - x1), 5.))
+        if ns and _replace_textgroup(lottie, ns):
+            changed = True
+    return changed
 
 
 async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, is_emoji: bool):
@@ -406,13 +652,11 @@ class JellyParserMod(loader.Module):
                 await self._client(functions.messages.GetStickerSetRequest(
                     stickerset=types.InputStickerSetShortName(short_name=target_short), hash=0
                 ))
-                # Set exists, increment and check again
                 n += 1
             except Exception as e:
                 if "STICKERSET_INVALID" in str(e) or "invalid" in str(e).lower():
                     break
                 else:
-                    # Treat other exceptions as free just in case
                     break
 
         me = await self._client.get_me()
@@ -420,6 +664,15 @@ class JellyParserMod(loader.Module):
 
         async def _upload_doc(i, doc):
             raw = await download_cached(self._client, doc)
+            
+            # Decompress, modify text placeholder to "jelly", compress back
+            try:
+                lottie_obj = json.loads(gzip.decompress(raw).decode("utf-8"))
+                modify_lottie(lottie_obj, "jelly")
+                raw = gzip.compress(json.dumps(lottie_obj, separators=(",", ":")).encode("utf-8"), compresslevel=9)
+            except Exception as e:
+                logger.error(f"Failed to replace text with jelly for emoji {i}: {e}")
+                
             buf = io.BytesIO(raw)
             buf.name = "sticker.tgs"
             buf.seek(0)
