@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.3.2                     ║
+# ║                        🎨 JellyColor v4.3.4                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.3.2: исправление сжатия TGS и ограничения размера паков      ║
+# ║  v4.3.4: ручная регулировка масштаба + предпросмотр в Избранном  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,9 +29,9 @@
 # meta developer: @justidev
 # requires: Pillow fonttools orjson
 #
-# modification: JellyColor TGS compression and size optimization fix
+# modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 3, 2)
+__version__ = (4, 3, 4)
 
 import asyncio
 import glob
@@ -1181,7 +1181,7 @@ def _find_username_bounds(lottie):
     return walk(lottie)
 
 
-def _replace_username(lottie, new_text, font_path):
+def _replace_username(lottie, new_text, font_path, scale_factor: float = 1.0):
     replaced = False
 
     def walk(obj):
@@ -1193,13 +1193,11 @@ def _replace_username(lottie, new_text, font_path):
                     x1, y1, x2, y2 = b
                     cx = (x1 + x2) / 2
                     cy = (y1 + y2) / 2
-                    L = len(new_text)
-                    h_scale = min(1.5, (13.0 / max(L, 1)) ** 0.4)
-                    h = max(abs(y2 - y1), 1.0) * h_scale
+                    h = max(abs(y2 - y1), 1.0) * scale_factor
                     w = max(abs(x2 - x1), 1.0)
                     cx_clamped = max(30.0, min(482.0, cx))
                     canvas_max_width = 2.0 * min(cx_clamped - 30.0, 482.0 - cx_clamped)
-                    allowed_w = min(canvas_max_width, w * 1.1)
+                    allowed_w = max(w, min(canvas_max_width, w * 2.5)) * scale_factor
                     ns = _text_to_lottie_shapes(
                         new_text,
                         font_path,
@@ -1346,7 +1344,7 @@ def _set_text_neon_style(lottie: dict, stroke_hex: str) -> None:
     _walk(lottie)
 
 
-def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
+def modify_lottie(lottie: dict, new_text: str, font_path: str = None, scale_factor: float = 1.0) -> bool:
     if not font_path:
         font_path=_ensure_font()
     if not font_path: return False
@@ -1354,17 +1352,15 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     bounds=_get_textgroup_bounds(lottie)
     if bounds:
         x1,y1,x2,y2=bounds; cx=(x1+x2)/2; cy=(y1+y2)/2
-        L = len(new_text)
-        h_scale = min(1.5, (5.0 / max(L, 1)) ** 0.4)
-        h = max(abs(y2-y1), 5.) * h_scale
+        h = max(abs(y2-y1), 5.) * scale_factor
         w = max(abs(x2-x1), 5.)
         cx_clamped = max(30.0, min(482.0, cx))
         canvas_max_width = 2.0 * min(cx_clamped - 30.0, 482.0 - cx_clamped)
-        allowed_w = min(canvas_max_width, w * 1.1)
+        allowed_w = max(w, min(canvas_max_width, w * 2.2)) * scale_factor
         ns=_text_to_lottie_shapes(new_text,font_path,cx,cy,h,max_width=allowed_w)
         if ns and _replace_textgroup(lottie,ns): changed=True
     if _find_username_bounds(lottie):
-        if _replace_username(lottie,NEW_USERNAME,font_path): changed=True
+        if _replace_username(lottie,NEW_USERNAME,font_path,scale_factor): changed=True
     return changed
 
 
@@ -2007,7 +2003,7 @@ class JellyColorMod(loader.Module):
         self._expire()
         uid=message.sender_id
         self._tsessions[uid]={"ts":time.time(),"step":"template","template":None,"text":None,
-                               "color":None,"pack_name":None,"preview_msg":None}
+                               "color":None,"pack_name":None,"preview_msg":None, "scale_factor": 0.8}
         await message.delete()
         await self.inline.form(text=self._jt_text(uid),reply_markup=self._jt_markup(uid),message=message)
     def _jt_text(self, uid):
@@ -2015,7 +2011,15 @@ class JellyColorMod(loader.Module):
         if step=="template": return pe("🖤",PE["brush"])+" <b>Выберите шаблон</b>\n\nТекст <code>"+TEMPLATE_PLACEHOLDER+"</code> будет заменён на ваш."
         if step=="text": return pe("✍️",PE["write"])+f" <b>Введите текст</b>\n\nШаблон: <b>{s['template']['title']}</b>\n2-4 символа — оптимально."
         if step=="font": return pe("✍️",PE["write"])+f" <b>Выберите шрифт</b>\n\nТекст: <code>{s['text']}</code>"
-        if step=="preview": return f"Ник <b>{s['text']}</b> оставить?"
+        if step=="preview":
+            return (pe("🔎",PE["eye"])+f" <b>Предпросмотр масштаба</b>\n\n"
+                    f"Текст: <code>{s['text']}</code>\n"
+                    f"Шрифт: <b>{s.get('font_title', 'Comfortaa')}</b>\n"
+                    f"Текущий масштаб: <b>{s.get('scale_factor', 0.8):.1f}x</b>\n\n"
+                    f"Первые 5 эмодзи отправлены в ваше <b>Избранное</b> (Saved Messages) для предпросмотра.\n"
+                    f"Вы можете настроить масштаб кнопками ниже.")
+        if step=="preview_gen":
+            return pe("⏰",PE["clock"])+f" <b>Генерирую предпросмотр...</b>\n\nСоздаю первые 5 эмодзи с масштабом <b>{s.get('scale_factor', 0.8):.1f}x</b> и отправляю в Избранное."
         if step=="color":
             hist=self._color_history()
             hs=("\n"+pe("⏰",PE["clock"])+" Последние: "+"  ".join(f"<code>{c}</code>" for c in hist)) if hist else ""
@@ -2038,10 +2042,24 @@ class JellyColorMod(loader.Module):
             for f in user_fonts:
                 buttons.append([{"text": f["title"], "icon_custom_emoji_id": PE["sticker"], "callback": self._jt_font_sel, "args": (uid, f["title"])}])
             return buttons
-        if step=="preview": return [[
-            {"text":"Да","icon_custom_emoji_id":PE["ok"],"callback":self._jt_confirm,"args":(uid,)},
-            {"text":"Изменить","icon_custom_emoji_id":PE["palette"],"callback":self._jt_retry,"args":(uid,)},
-        ]]
+        if step=="preview":
+            me_id = s.get("me_id") or uid
+            saved_messages_link = f"tg://openmessage?user_id={me_id}"
+            return [
+                [
+                    {"text": "🔎 Мельче (-10%)", "callback": self._jt_scale_change, "args": (uid, -0.1)},
+                    {"text": "🔍 Крупнее (+10%)", "callback": self._jt_scale_change, "args": (uid, 0.1)},
+                ],
+                [
+                    {"text": "✅ Применить", "icon_custom_emoji_id": PE["ok"], "callback": self._jt_confirm, "args": (uid,)},
+                    {"text": "✏️ Изменить текст", "icon_custom_emoji_id": PE["brush"], "callback": self._jt_retry, "args": (uid,)},
+                ],
+                [
+                    {"text": "💬 Перейти в Избранное", "icon_custom_emoji_id": PE["link"], "url": saved_messages_link}
+                ]
+            ]
+        if step=="preview_gen":
+            return []
         if step=="color":
             rows=self._color_rows_with_gradient(uid,self._jt_col,self._jt_hex,self._jt_open_grad,
                                                  no_color_cb=self._jt_no_color,
@@ -2085,6 +2103,9 @@ class JellyColorMod(loader.Module):
     async def _jt_font_sel(self, call, uid, font_title):
         s = self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.", show_alert=True); return
+        if s.get("preview_running"):
+            await call.answer("⏳ Генерируется предыдущий предпросмотр, подождите...", show_alert=True)
+            return
         if font_title == "default":
             s["font_path"] = None
             s["font_title"] = "Comfortaa"
@@ -2097,18 +2118,108 @@ class JellyColorMod(loader.Module):
             else:
                 s["font_path"] = None
                 s["font_title"] = "Comfortaa"
-        s["step"] = "preview"
+        s["step"] = "preview_gen"
         await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+        asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
+
+    async def _jt_scale_change(self, call, uid, delta):
+        s = self._tsessions.get(uid)
+        if not s: await call.answer("Сессия устарела.", show_alert=True); return
+        if s.get("preview_running"):
+            await call.answer("⏳ Генерируется предыдущий предпросмотр, подождите...", show_alert=True)
+            return
+        s["scale_factor"] = round(max(0.1, min(3.0, s.get("scale_factor", 0.8) + delta)), 1)
+        s["step"] = "preview_gen"
+        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+        asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
+
+    async def _jt_generate_and_send_preview(self, uid, call):
+        s = self._tsessions.get(uid)
+        if not s: return
+        s["preview_running"] = True
+        if "scale_factor" not in s:
+            s["scale_factor"] = 0.8
+        tmpl = s["template"]
+        txt = s["text"]
+        font_path = s.get("font_path")
+        if not font_path:
+            font_path = _ensure_font()
+        try:
+            try:
+                fs = await self._client(functions.messages.GetStickerSetRequest(
+                    stickerset=types.InputStickerSetShortName(short_name=tmpl["short_name"]), hash=0
+                ))
+                docs = list(fs.documents)[:5]
+            except Exception as e:
+                await call.edit(text=pe("❌",PE["err"])+f" Ошибка шаблона: <code>{e}</code>")
+                return
+            
+            me = await self._client.get_me()
+            s["me_id"] = me.id
+            
+            try:
+                await self._client.send_message(
+                    "me", 
+                    f"<b>🎨 JellyColor: Предпросмотр</b>\n"
+                    f"Шаблон: <code>{tmpl['title']}</code>\n"
+                    f"Текст: <code>{txt}</code>\n"
+                    f"Масштаб: <code>{s['scale_factor']:.1f}x</code>"
+                )
+            except Exception:
+                pass
+
+            loop = asyncio.get_event_loop()
+            for doc in docs:
+                try:
+                    raw = await download_cached(self._client, doc)
+                    mime = getattr(doc, "mime_type", "")
+                    if mime == "application/x-tgsticker":
+                        def _process_tgs():
+                            lottie_obj = json_loads(gzip.decompress(raw))
+                            modify_lottie(lottie_obj, txt, font_path, scale_factor=s["scale_factor"])
+                            return compress_tgs(lottie_obj)
+                        patched = await loop.run_in_executor(None, _process_tgs)
+                        buf = io.BytesIO(patched)
+                        buf.name = "preview_sticker.tgs"
+                    else:
+                        def _process_img():
+                            img = Image.open(io.BytesIO(raw)).convert("RGBA").resize((100,100), Image.LANCZOS)
+                            buf = io.BytesIO()
+                            img.save(buf, format="WEBP", lossless=True)
+                            buf.seek(0)
+                            return buf.getvalue()
+                        img_data = await loop.run_in_executor(None, _process_img)
+                        buf = io.BytesIO(img_data)
+                        buf.name = "preview_sticker.webp"
+                    up = await self._client.upload_file(buf, file_name=buf.name)
+                    await self._client.send_file("me", up, force_document=False)
+                except Exception as e:
+                    logger.exception("Failed to send preview item")
+        finally:
+            s["preview_running"] = False
+            if uid in self._tsessions and self._tsessions[uid] is s:
+                s["step"] = "preview"
+                await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+                try:
+                    await call.answer("💬 Первые 5 эмодзи отправлены в Избранное (Saved Messages) для предпросмотра!", show_alert=True)
+                except Exception:
+                    pass
 
     async def _jt_confirm(self,call,uid):
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
+        if s.get("preview_running"):
+            await call.answer("⏳ Подождите окончания генерации предпросмотра.", show_alert=True)
+            return
         s["step"]="color"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
     async def _jt_retry(self,call,uid):
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
+        if s.get("preview_running"):
+            await call.answer("⏳ Подождите окончания генерации предпросмотра.", show_alert=True)
+            return
         s["step"]="text"; s["text"]=None
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
@@ -2236,7 +2347,7 @@ class JellyColorMod(loader.Module):
             if mime=="application/x-tgsticker":
                 def _process_tgs():
                     lottie_obj = json_loads(gzip.decompress(raw))
-                    modify_lottie(lottie_obj, txt, s.get("font_path"))
+                    modify_lottie(lottie_obj, txt, s.get("font_path"), scale_factor=s.get("scale_factor", 1.0))
                     if gradient:
                         apply_gradient_lottie(lottie_obj, gradient)
                         outline_color = _dominant_color_from_gradient(gradient["colors"])
