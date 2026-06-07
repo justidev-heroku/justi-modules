@@ -29,20 +29,25 @@
 # meta developer: @justidev
 # requires: Pillow fonttools lottie
 
-__version__ = (3, 8, 6)
+__version__ = (3, 8, 7)
 
 import asyncio
 import glob
 import gzip
+import hashlib
 import io
 import json
+import logging
 import math
 import os
 import re
 import time
+import traceback
+import urllib.request
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from telethon.tl import functions, types
 from telethon.tl.types import (
@@ -56,7 +61,31 @@ from telethon.tl.types import (
     MessageEntityCustomEmoji,
 )
 
+from lottie.objects import (
+    Animation,
+    TextLayer,
+    Group,
+    ShapeLayer,
+    Path,
+    Fill,
+    TransformShape,
+    Bezier,
+    NVector,
+    Color,
+    FillRule,
+    BoundingBox,
+)
+
+try:
+    from fontTools.ttLib import TTFont
+    from fontTools.pens.recordingPen import DecomposingRecordingPen
+    HAS_FONTTOOLS = True
+except ImportError:
+    HAS_FONTTOOLS = False
+
 from .. import loader, utils
+
+logger = logging.getLogger("JellyColor")
 
 
 PRESET_COLORS: Dict[str, str] = {
@@ -162,7 +191,6 @@ def _dominant_color_from_gradient(colors: list) -> str:
 # ─── Image tinting ────────────────────────────────────────────────────────────
 
 def tint_image(img: Image.Image, hex_color: str) -> Image.Image:
-    from PIL import ImageChops
     r_target, g_target, b_target = hex_to_rgb(hex_color)
     img = img.convert("RGBA")
     r, g, b, ao = img.split()
@@ -213,7 +241,6 @@ def create_gradient_image(width: int, height: int, colors_hex: list, direction: 
 
 
 def tint_image_gradient(img: Image.Image, colors_hex: list, direction: str) -> Image.Image:
-    from PIL import ImageChops
     img = img.convert("RGBA")
     w, h = img.size
     r, g, b, ao = img.split()
@@ -790,7 +817,7 @@ def _find_font():
 
 
 def _ensure_font():
-    import logging; log = logging.getLogger("JellyColor")
+    log = logging.getLogger("JellyColor")
     comfortaa_system_path = _FONT_SEARCH[0]
     if os.path.exists(comfortaa_system_path):
         return comfortaa_system_path
@@ -798,7 +825,6 @@ def _ensure_font():
         return _CACHED_FONT_PATH
     log.info("_ensure_font: downloading from CDN...")
     try:
-        import urllib.request
         urllib.request.urlretrieve(_FONT_CDN_URL, _CACHED_FONT_PATH)
         if os.path.exists(_CACHED_FONT_PATH) and os.path.getsize(_CACHED_FONT_PATH) > 50000:
             return _CACHED_FONT_PATH
@@ -809,11 +835,6 @@ def _ensure_font():
     return None
 
 
-
-from lottie.objects import Animation, TextLayer, Group, ShapeLayer, Path, Fill, TransformShape, Bezier, NVector, Color, FillRule, BoundingBox
-from typing import Any
-import logging
-logger = logging.getLogger("JellyColor")
 
 def should_ignore(item):
     name = (getattr(item, "name", "") or "").lower()
@@ -1068,11 +1089,8 @@ def _get_textgroup_bounds(animation):
 
 def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None, justify=2, line_spacing=1.2):
     logger.info(f"_text_to_lottie_shapes: text={repr(text)}, cx={cx}, cy={cy}, height={height}, max_width={max_width}, justify={justify}, line_spacing={line_spacing}")
-    try:
-        from fontTools.ttLib import TTFont
-        from fontTools.pens.recordingPen import DecomposingRecordingPen
-    except ImportError as e:
-        logger.error(f"Failed to import fontTools: {e}")
+    if not HAS_FONTTOOLS:
+        logger.error("Failed to import fontTools")
         return None
 
     ft = TTFont(font_path)
@@ -1610,9 +1628,6 @@ class JellyColorMod(loader.Module):
         return out
 
     async def _report_error(self, e: Exception, ptype: str, pname: str):
-        import logging
-        import traceback
-        logger = logging.getLogger("JellyColor")
         logger.exception("JellyColor error occurred")
         try:
             cid = self.db.get("heroku.forums", "channel_id", None)
@@ -1630,7 +1645,6 @@ class JellyColorMod(loader.Module):
                 f"<b>Traceback:</b>\n"
                 f"<pre><code class=\"language-python\">{tb_str[:3000]}</code></pre>"
             )
-            import glob
             debug_files = glob.glob("/tmp/jelly_debug_last.*")
             if debug_files:
                 await self._client.send_file(
@@ -1679,8 +1693,7 @@ class JellyColorMod(loader.Module):
         - прогресс обновляется строго под lock
         - FloodWaitError обрабатывается явно
         """
-        import logging
-        log = logging.getLogger("JellyColor")
+        log = logger
         results=[]; lock=asyncio.Lock(); progress=[0]; sem=self._sem()
         last_edit=[0.0]  # время последнего edit, общее для всех корутин
 
@@ -2359,7 +2372,6 @@ class JellyColorMod(loader.Module):
             await utils.answer(message, pe("❌", PE["err"]) + " Недопустимое название шрифта.")
             return
 
-        import hashlib
         h = hashlib.md5(safe_title.encode("utf-8")).hexdigest()
         dest_filename = f"{h}{ext}"
         dest_path = os.path.join("/root/jelly_fonts", dest_filename)
@@ -2509,7 +2521,6 @@ class JellyColorMod(loader.Module):
             await utils.answer(message, pe("❌", PE["err"]) + f" Градиент с названием <b>{name}</b> уже существует.")
             return
             
-        import uuid
         g_id = "user_" + uuid.uuid4().hex[:8]
         new_g = {
             "id": g_id,
