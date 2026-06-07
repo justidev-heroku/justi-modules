@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.1.1                     ║
+# ║                        🎨 JellyColor v4.2.1                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.1.1: оптимизация скорости (orjson, 1D-градиенты, быстрое сжатие TGS) ║
+# ║  v4.2.1: выбор при существовании пака, масштабируемый текст      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,9 +29,9 @@
 # meta developer: @justidev
 # requires: Pillow fonttools orjson
 #
-# modification: JellyColor speed optimizations (orjson, 1D-gradients, fast TGS compression)
+# modification: JellyColor pack exists handling, scalable text, and version bump
 
-__version__ = (4, 1, 1)
+__version__ = (4, 2, 1)
 
 import asyncio
 import glob
@@ -1177,13 +1177,20 @@ def _replace_username(lottie, new_text, font_path):
                 b = _verts_to_bounds(_collect_path_verts(obj))
                 if b:
                     x1, y1, x2, y2 = b
+                    cx = (x1 + x2) / 2
+                    cy = (y1 + y2) / 2
+                    h = max(abs(y2 - y1), 1.0)
+                    w = max(abs(x2 - x1), 1.0)
+                    cx_clamped = max(30.0, min(482.0, cx))
+                    canvas_max_width = 2.0 * min(cx_clamped - 30.0, 482.0 - cx_clamped)
+                    allowed_w = max(w, min(canvas_max_width, w * 2.5))
                     ns = _text_to_lottie_shapes(
                         new_text,
                         font_path,
-                        (x1 + x2) / 2,
-                        (y1 + y2) / 2,
-                        max(abs(y2 - y1), 1.0),
-                        max_width=max(abs(x2 - x1), 1.0),
+                        cx,
+                        cy,
+                        h,
+                        max_width=allowed_w,
                     )
                     if ns:
                         if "it" in obj:
@@ -1331,7 +1338,12 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     bounds=_get_textgroup_bounds(lottie)
     if bounds:
         x1,y1,x2,y2=bounds; cx=(x1+x2)/2; cy=(y1+y2)/2
-        ns=_text_to_lottie_shapes(new_text,font_path,cx,cy,max(abs(y2-y1),5.),max_width=max(abs(x2-x1),5.))
+        h = max(abs(y2-y1), 5.)
+        w = max(abs(x2-x1), 5.)
+        cx_clamped = max(30.0, min(482.0, cx))
+        canvas_max_width = 2.0 * min(cx_clamped - 30.0, 482.0 - cx_clamped)
+        allowed_w = max(w, min(canvas_max_width, w * 2.2))
+        ns=_text_to_lottie_shapes(new_text,font_path,cx,cy,h,max_width=allowed_w)
         if ns and _replace_textgroup(lottie,ns): changed=True
     if _find_username_bounds(lottie):
         if _replace_username(lottie,NEW_USERNAME,font_path): changed=True
@@ -1418,7 +1430,7 @@ async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, i
     )
 
 
-async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, retries=3):
+async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, exists_mode="recreate", retries=3):
     for i in range(retries):
         sn=short_name if i==0 else f"{short_name}_v{i+1}"
         try:
@@ -1443,11 +1455,12 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, r
                             sticker=sticker
                         ))
                     
-                    # Delete old stickers
-                    for doc in old_docs:
-                        await client(functions.stickers.RemoveStickerFromSetRequest(
-                            sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
-                        ))
+                    # Delete old stickers only if mode is recreate
+                    if exists_mode == "recreate":
+                        for doc in old_docs:
+                            await client(functions.stickers.RemoveStickerFromSetRequest(
+                                sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
+                            ))
                     return sn,None
                 except Exception as add_err:
                     logger.exception(f"Failed to add/remove stickers for existing set {sn}")
@@ -1697,6 +1710,8 @@ class JellyColorMod(loader.Module):
             return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nЦвет: {label}\n\n<i>Введите отображаемое название (любые символы)</i>"
         if step=="name":
             return pe("🏷",PE["sticker"])+f" <b>short_name пака</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите short_name — только a-z, 0-9, _</i>"
+        if step=="exists_choice":
+            return pe("⚠️",PE["info"])+f" <b>Пак уже существует!</b>\n\nПак <code>{s['pack_name']}</code> уже создан на вашем аккаунте. Выберите действие:"
         return pe("⏰",PE["clock"])+" <b>Перекрашиваю...</b>"
 
     def _j_markup(self,uid):
@@ -1715,6 +1730,18 @@ class JellyColorMod(loader.Module):
                                     "input":"Например: My Cool Pack","handler":self._j_title,"args":(uid,)}]]
         if step=="name": return [[{"text":"Ввести short_name","icon_custom_emoji_id":PE["palette"],
                                    "input":"a-z, 0-9, _ (без _by_username)","handler":self._j_name,"args":(uid,)}]]
+        if step=="exists_choice":
+            return [
+                [
+                    {"text": "Пересоздать (очистить пак)", "icon_custom_emoji_id": PE["trash"], "callback": self._j_handle_exists_choice, "args": (uid, "recreate")},
+                ],
+                [
+                    {"text": "Добавить (сохранить старые)", "icon_custom_emoji_id": PE["pack"], "callback": self._j_handle_exists_choice, "args": (uid, "add")},
+                ],
+                [
+                    {"text": "Отмена", "icon_custom_emoji_id": PE["err"], "callback": self._j_handle_exists_choice, "args": (uid, "cancel")},
+                ]
+            ]
         return []
 
     async def _j_s1(self,call,uid):
@@ -1801,10 +1828,39 @@ class JellyColorMod(loader.Module):
         c=value.strip().lower()
         if not validate_short_name(c): await call.answer("Только a-z,0-9,_",show_alert=True); return
         me=await self._client.get_me()
-        s["pack_name"]=c+"_by_"+(me.username or "userbot")
+        pname=c+"_by_"+(me.username or "userbot")
+        s["pack_name"]=pname
+        
+        # Check if pack already exists
+        exists = False
+        try:
+            await self._client(functions.stickers.GetStickerSetRequest(
+                stickerset=types.InputStickerSetShortName(short_name=pname), hash=0
+            ))
+            exists = True
+        except Exception:
+            pass
+            
+        if exists:
+            s["step"]="exists_choice"
+            await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
+        else:
+            s["step"]="processing"
+            s["exists_mode"]="recreate"
+            await call.edit(text=self._j_text(uid))
+            asyncio.ensure_future(self._j_run(call,uid))
+
+    async def _j_handle_exists_choice(self, call, uid, choice):
+        s=self._sessions.get(uid)
+        if not s: await call.answer("Сессия устарела.",show_alert=True); return
+        if choice == "cancel":
+            s["step"]="name"
+            await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
+            return
+        s["exists_mode"] = choice
         s["step"]="processing"
         await call.edit(text=self._j_text(uid))
-        asyncio.ensure_future(self._j_run(call,uid))
+        asyncio.ensure_future(self._j_run(call, uid))
 
     async def _j_run(self,call,uid):
         s=self._sessions[uid]
@@ -1854,7 +1910,7 @@ class JellyColorMod(loader.Module):
             if not ordered: raise ValueError("Нет стикеров")
             clabel=gradient["name"] if gradient else (color or "без перекраски")
             title=s.get("pack_title") or "JellyColor "+clabel
-            fn,err=await _safe_create_set(self._client,me.id,title,pname,ordered,ptype=="emoji")
+            fn,err=await _safe_create_set(self._client,me.id,title,pname,ordered,ptype=="emoji",exists_mode=s.get("exists_mode","recreate"))
             if err: raise ValueError(err)
             link="https://t.me/"+("addemoji/" if ptype=="emoji" else "addstickers/")+fn
         except Exception as e:
@@ -1948,6 +2004,8 @@ class JellyColorMod(loader.Module):
             return pe("🎨",PE["palette"])+f" <b>Цвет эмодзи</b>\n\nТекст: <code>{s['text']}</code>{hs}"
         if step=="title": return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nТекст: <code>{s['text']}</code>" + (f"  Цвет: <code>{s['color']}</code>" if s.get('color') else "  (без перекраски)") + "\n\n<i>Введите отображаемое название (любые символы)</i>"
         if step=="name": return pe("🏷",PE["sticker"])+f" <b>short_name пака</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите short_name — только a-z, 0-9, _</i>"
+        if step=="exists_choice":
+            return pe("⚠️",PE["info"])+f" <b>Пак уже существует!</b>\n\nПак <code>{s['pack_name']}</code> уже создан на вашем аккаунте. Выберите действие:"
         return pe("⏰",PE["clock"])+" <b>Создаём...</b>"
 
     def _jt_markup(self,uid):
@@ -1977,6 +2035,18 @@ class JellyColorMod(loader.Module):
             "input":"Например: My Cool Pack","handler":self._jt_title,"args":(uid,)}]]
         if step=="name": return [[{"text":"Ввести short_name","icon_custom_emoji_id":PE["palette"],
             "input":"a-z, 0-9, _ (без _by_username)","handler":self._jt_name,"args":(uid,)}]]
+        if step=="exists_choice":
+            return [
+                [
+                    {"text": "Пересоздать (очистить пак)", "icon_custom_emoji_id": PE["trash"], "callback": self._jt_handle_exists_choice, "args": (uid, "recreate")},
+                ],
+                [
+                    {"text": "Добавить (сохранить старые)", "icon_custom_emoji_id": PE["pack"], "callback": self._jt_handle_exists_choice, "args": (uid, "add")},
+                ],
+                [
+                    {"text": "Отмена", "icon_custom_emoji_id": PE["err"], "callback": self._jt_handle_exists_choice, "args": (uid, "cancel")},
+                ]
+            ]
         return []
 
     async def _jt_tmpl(self,call,uid,idx):
@@ -2095,9 +2165,39 @@ class JellyColorMod(loader.Module):
         c=value.strip().lower()
         if not validate_short_name(c): await call.answer("Только a-z,0-9,_",show_alert=True); return
         me=await self._client.get_me()
-        s["pack_name"]=c+"_by_"+(me.username or "userbot"); s["step"]="processing"
+        pname=c+"_by_"+(me.username or "userbot")
+        s["pack_name"]=pname
+        
+        # Check if pack already exists
+        exists = False
+        try:
+            await self._client(functions.stickers.GetStickerSetRequest(
+                stickerset=types.InputStickerSetShortName(short_name=pname), hash=0
+            ))
+            exists = True
+        except Exception:
+            pass
+            
+        if exists:
+            s["step"]="exists_choice"
+            await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+        else:
+            s["step"]="processing"
+            s["exists_mode"]="recreate"
+            await call.edit(text=self._jt_text(uid))
+            asyncio.ensure_future(self._jt_run(call,uid))
+
+    async def _jt_handle_exists_choice(self, call, uid, choice):
+        s=self._tsessions.get(uid)
+        if not s: await call.answer("Сессия устарела.",show_alert=True); return
+        if choice == "cancel":
+            s["step"]="name"
+            await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+            return
+        s["exists_mode"] = choice
+        s["step"]="processing"
         await call.edit(text=self._jt_text(uid))
-        asyncio.ensure_future(self._jt_run(call,uid))
+        asyncio.ensure_future(self._jt_run(call, uid))
 
     async def _jt_run(self,call,uid):
         s=self._tsessions[uid]
@@ -2161,7 +2261,7 @@ class JellyColorMod(loader.Module):
         color_label=gradient["name"] if gradient else (color or "без перекраски")
         try:
             pack_title=s.get("pack_title") or txt+" Emoji Pack"
-            fn,err=await _safe_create_set(self._client,me.id,pack_title,pname,ordered,True)
+            fn,err=await _safe_create_set(self._client,me.id,pack_title,pname,ordered,True,exists_mode=s.get("exists_mode","recreate"))
             if err: raise ValueError(err)
             link="https://t.me/addemoji/"+fn
         except Exception as e:
