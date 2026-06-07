@@ -967,13 +967,60 @@ def _get_single_target_bounds(target):
         doc = None
         if target.data and target.data.data and target.data.data.keyframes:
             doc = target.data.data.keyframes[0].start
-        font_size = doc.font_size if doc else 50.0
-        max_width = 512.0
-        if doc and doc.wrap_size and doc.wrap_size[0] > 0:
-            max_width = doc.wrap_size[0]
-        elif target.composition and target.composition.width:
-            max_width = target.composition.width
-        return (cx - max_width / 2.0, cy - font_size / 2.0, cx + max_width / 2.0, cy + font_size / 2.0)
+        
+        font_size = 50.0
+        text = "Text"
+        justify = 0
+        baseline_shift = 0.0
+        line_height = 60.0
+        wrap_size = None
+        wrap_position = None
+        
+        if doc:
+            if hasattr(doc, "font_size") and doc.font_size is not None:
+                font_size = float(doc.font_size)
+            if hasattr(doc, "text") and doc.text is not None:
+                text = str(doc.text)
+            if hasattr(doc, "justify") and doc.justify is not None:
+                justify = int(doc.justify.value) if hasattr(doc.justify, "value") else int(doc.justify)
+            if hasattr(doc, "baseline_shift") and doc.baseline_shift is not None:
+                baseline_shift = float(doc.baseline_shift)
+            if hasattr(doc, "line_height") and doc.line_height is not None:
+                line_height = float(doc.line_height)
+            else:
+                line_height = font_size * 1.2
+            if hasattr(doc, "wrap_size") and doc.wrap_size is not None:
+                wrap_size = doc.wrap_size
+            if hasattr(doc, "wrap_position") and doc.wrap_position is not None:
+                wrap_position = doc.wrap_position
+        
+        if wrap_size and hasattr(wrap_size, "__len__") and len(wrap_size) >= 2 and wrap_size[0] > 0 and wrap_size[1] > 0:
+            px, py = (wrap_position[0], wrap_position[1]) if (wrap_position and hasattr(wrap_position, "__len__") and len(wrap_position) >= 2) else (0.0, 0.0)
+            w, h = wrap_size[0], wrap_size[1]
+            return (cx + px, cy + py, cx + px + w, cy + py + h)
+            
+        # Point text: estimate bounds based on lines and justification
+        lines = text.replace("\r", "\n").split("\n")
+        L = len(lines)
+        max_chars = max(len(line) for line in lines) if lines else 0
+        estimated_width = max_chars * font_size * 0.55
+        
+        if justify in (0, 3):  # Left / Full-Left
+            x1 = cx
+            x2 = cx + estimated_width
+        elif justify in (1, 4):  # Right / Full-Right
+            x1 = cx - estimated_width
+            x2 = cx
+        else:  # Center / Full-Center / Justify
+            x1 = cx - estimated_width / 2.0
+            x2 = cx + estimated_width / 2.0
+            
+        # baseline of first line is at cy - baseline_shift
+        # top of first line is at cy - baseline_shift - 0.8 * font_size
+        # bottom of last line is at cy - baseline_shift + (L - 1) * line_height + 0.2 * font_size
+        y1 = cy - baseline_shift - 0.8 * font_size
+        y2 = cy - baseline_shift + (L - 1) * line_height + 0.2 * font_size
+        return (x1, y1, x2, y2)
 
     paths = []
     def collect_paths(item):
@@ -1002,7 +1049,7 @@ def _get_textgroup_bounds(animation):
         return None
     return _get_single_target_bounds(targets[0])
 
-def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
+def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None, justify=2, line_spacing=1.2):
     try:
         from fontTools.ttLib import TTFont
         from fontTools.pens.recordingPen import DecomposingRecordingPen
@@ -1019,27 +1066,44 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     if cap_h <= 0:
         cap_h = upm * 0.72
 
-    sc = height / cap_h
-    total_adv = 0.0
-    glyph_list = []
+    # Parse all lines
+    lines = text.replace("\r", "\n").split("\n")
+    L = len(lines)
+    
+    # Calculate scale factor sc
+    local_height = cap_h * (1.0 + (L - 1) * line_spacing)
+    local_height = max(local_height, 1.0)
+    sc = height / local_height
 
-    for ch in text:
-        gn = cm.get(ord(ch))
-        if not gn or gn not in gs:
-            fb = {ord("'"): [0x2019, 0x02BC], ord("–"): [0x002D], ord("—"): [0x002D]}
-            for alt in fb.get(ord(ch), []):
-                gn = cm.get(alt)
-                if gn and gn in gs:
-                    break
-            else:
-                gn = None
-        adv = float(gs[gn].width) if gn and gn in gs else upm * 0.35
-        glyph_list.append((gn, adv))
-        total_adv += adv
+    # For each line, gather glyphs and compute total advance
+    lines_glyphs = []
+    max_line_width = 0.0
+    for line in lines:
+        glyph_list = []
+        line_adv = 0.0
+        for ch in line:
+            gn = cm.get(ord(ch))
+            if not gn or gn not in gs:
+                fb = {ord("'"): [0x2019, 0x02BC], ord("–"): [0x002D], ord("—"): [0x002D]}
+                for alt in fb.get(ord(ch), []):
+                    gn = cm.get(alt)
+                    if gn and gn in gs:
+                        break
+                else:
+                    gn = None
+            adv = float(gs[gn].width) if gn and gn in gs else upm * 0.35
+            glyph_list.append((gn, adv))
+            line_adv += adv
+        lines_glyphs.append((glyph_list, line_adv))
+        if line_adv > max_line_width:
+            max_line_width = line_adv
 
+    max_line_width = max(max_line_width, 1.0)
+
+    # Compute scale_x and scale_y
     scale_y = sc * 100.0
-    if max_width and (total_adv * sc) > max_width:
-        scale_x = (max_width / total_adv) * 100.0
+    if max_width and (max_line_width * sc) > max_width:
+        scale_x = (max_width / max_line_width) * 100.0
     else:
         scale_x = sc * 100.0
 
@@ -1053,102 +1117,110 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     fill_obj.color.value = Color(1.0, 1.0, 1.0)
     parent_group.shapes.insert(0, fill_obj)
 
-    start_x = -total_adv / 2.0
-    cur_x = 0.0
+    for line_idx, (glyph_list, line_adv) in enumerate(lines_glyphs):
+        if justify in (0, 3):  # Left / Full-Left
+            start_x = -max_line_width / 2.0
+        elif justify in (1, 4):  # Right / Full-Right
+            start_x = max_line_width / 2.0 - line_adv
+        else:  # Center / Full-Center / Justify
+            start_x = -line_adv / 2.0
 
-    for char_idx, (gn, adv) in enumerate(glyph_list):
-        if gn is None:
-            cur_x += adv
-            continue
+        # Calculate baseline y for this line in local coordinate system
+        baseline_y = cap_h * ( - (1.0 + (L - 1) * line_spacing) / 2.0 + 1.0 + line_idx * line_spacing )
 
-        char_group = Group()
-        char_group.name = f"Char_{char_idx}"
+        cur_x = 0.0
+        for char_idx, (gn, adv) in enumerate(glyph_list):
+            if gn is None:
+                cur_x += adv
+                continue
 
-        pen = DecomposingRecordingPen(gs)
-        gs[gn].draw(pen)
+            char_group = Group()
+            char_group.name = f"L{line_idx}_Char_{char_idx}"
 
-        current_bezier = None
+            pen = DecomposingRecordingPen(gs)
+            gs[gn].draw(pen)
 
-        def commit_path():
-            if current_bezier and len(current_bezier.vertices) > 0:
-                p_obj = Path()
-                p_obj.name = "p"
-                p_obj.shape.value = current_bezier
-                char_group.shapes.insert(0, p_obj)
+            current_bezier = None
 
-        for op, args in pen.value:
-            if op == "moveTo":
-                commit_path()
-                current_bezier = Bezier()
-                current_bezier.closed = True
-                fx, fy = args[0]
-                current_bezier.add_point(
-                    NVector(fx, cap_h / 2.0 - fy),
-                    NVector(0.0, 0.0),
-                    NVector(0.0, 0.0)
-                )
-            elif op == "lineTo":
-                if current_bezier is None:
+            def commit_path():
+                if current_bezier and len(current_bezier.vertices) > 0:
+                    p_obj = Path()
+                    p_obj.name = "p"
+                    p_obj.shape.value = current_bezier
+                    char_group.shapes.insert(0, p_obj)
+
+            for op, args in pen.value:
+                if op == "moveTo":
+                    commit_path()
                     current_bezier = Bezier()
                     current_bezier.closed = True
-                fx, fy = args[0]
-                current_bezier.add_point(
-                    NVector(fx, cap_h / 2.0 - fy),
-                    NVector(0.0, 0.0),
-                    NVector(0.0, 0.0)
-                )
-            elif op == "curveTo":
-                if current_bezier is None:
-                    current_bezier = Bezier()
-                    current_bezier.closed = True
-                (c1x, c1y), (c2x, c2y), (ex, ey) = args
-                pv = current_bezier.vertices[-1]
-                c1_lottie = NVector(c1x, cap_h / 2.0 - c1y)
-                current_bezier.out_tangents[-1] = c1_lottie - pv
-
-                ev_lottie = NVector(ex, cap_h / 2.0 - ey)
-                c2_lottie = NVector(c2x, cap_h / 2.0 - c2y)
-                current_bezier.add_point(
-                    ev_lottie,
-                    c2_lottie - ev_lottie,
-                    NVector(0.0, 0.0)
-                )
-            elif op == "qCurveTo":
-                if current_bezier is None:
-                    current_bezier = Bezier()
-                    current_bezier.closed = True
-                pts = list(args)
-                p0 = current_bezier.vertices[-1]
-
-                for qi in range(len(pts) - 1):
-                    qcx, qcy = pts[qi]
-                    qex, qey = pts[qi + 1] if qi == len(pts) - 2 else ((pts[qi][0] + pts[qi + 1][0]) / 2, (pts[qi][1] + pts[qi + 1][1]) / 2)
-
-                    qcs = NVector(qcx, cap_h / 2.0 - qcy)
-                    qes = NVector(qex, cap_h / 2.0 - qey)
-
-                    c1s = p0 + (qcs - p0) * (2.0 / 3.0)
-                    c2s = qes + (qcs - qes) * (2.0 / 3.0)
-
-                    current_bezier.out_tangents[-1] = c1s - p0
+                    fx, fy = args[0]
                     current_bezier.add_point(
-                        qes,
-                        c2s - qes,
+                        NVector(fx, baseline_y - fy),
+                        NVector(0.0, 0.0),
                         NVector(0.0, 0.0)
                     )
-                    p0 = qes
-            elif op in ("endPath", "closePath"):
-                if current_bezier:
-                    current_bezier.closed = True
-                    commit_path()
-                    current_bezier = None
+                elif op == "lineTo":
+                    if current_bezier is None:
+                        current_bezier = Bezier()
+                        current_bezier.closed = True
+                    fx, fy = args[0]
+                    current_bezier.add_point(
+                        NVector(fx, baseline_y - fy),
+                        NVector(0.0, 0.0),
+                        NVector(0.0, 0.0)
+                    )
+                elif op == "curveTo":
+                    if current_bezier is None:
+                        current_bezier = Bezier()
+                        current_bezier.closed = True
+                    (c1x, c1y), (c2x, c2y), (ex, ey) = args
+                    pv = current_bezier.vertices[-1]
+                    c1_lottie = NVector(c1x, baseline_y - c1y)
+                    current_bezier.out_tangents[-1] = c1_lottie - pv
 
-        commit_path()
+                    ev_lottie = NVector(ex, baseline_y - ey)
+                    c2_lottie = NVector(c2x, baseline_y - c2y)
+                    current_bezier.add_point(
+                        ev_lottie,
+                        c2_lottie - ev_lottie,
+                        NVector(0.0, 0.0)
+                    )
+                elif op == "qCurveTo":
+                    if current_bezier is None:
+                        current_bezier = Bezier()
+                        current_bezier.closed = True
+                    pts = list(args)
+                    p0 = current_bezier.vertices[-1]
 
-        char_group.transform.position.value = NVector(start_x + cur_x, 0.0)
-        parent_group.shapes.insert(0, char_group)
+                    for qi in range(len(pts) - 1):
+                        qcx, qcy = pts[qi]
+                        qex, qey = pts[qi + 1] if qi == len(pts) - 2 else ((pts[qi][0] + pts[qi + 1][0]) / 2, (pts[qi][1] + pts[qi + 1][1]) / 2)
 
-        cur_x += adv
+                        qcs = NVector(qcx, baseline_y - qcy)
+                        qes = NVector(qex, baseline_y - qey)
+
+                        c1s = p0 + (qcs - p0) * (2.0 / 3.0)
+                        c2s = qes + (qcs - qes) * (2.0 / 3.0)
+
+                        current_bezier.out_tangents[-1] = c1s - p0
+                        current_bezier.add_point(
+                            qes,
+                            c2s - qes,
+                            NVector(0.0, 0.0)
+                        )
+                        p0 = qes
+                elif op in ("endPath", "closePath"):
+                    if current_bezier:
+                        current_bezier.closed = True
+                        commit_path()
+                        current_bezier = None
+
+            commit_path()
+
+            char_group.transform.position.value = NVector(start_x + cur_x, 0.0)
+            parent_group.shapes.insert(0, char_group)
+            cur_x += adv
 
     parent_group.transform.position.value = NVector(cx, cy)
     parent_group.transform.scale.value = NVector(scale_x, scale_y)
@@ -1303,7 +1375,19 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
             height = max(abs(y2 - y1), 5.0)
             max_width = max(abs(x2 - x1), 5.0)
 
-            new_group = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width)
+            justify = 2
+            line_spacing = 1.2
+            if isinstance(target, TextLayer):
+                doc = None
+                if target.data and target.data.data and target.data.data.keyframes:
+                    doc = target.data.data.keyframes[0].start
+                if doc:
+                    if hasattr(doc, "justify") and doc.justify is not None:
+                        justify = int(doc.justify.value) if hasattr(doc.justify, "value") else int(doc.justify)
+                    if hasattr(doc, "line_height") and doc.line_height and hasattr(doc, "font_size") and doc.font_size:
+                        line_spacing = doc.line_height / doc.font_size
+
+            new_group = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width, justify=justify, line_spacing=line_spacing)
             if new_group:
                 is_car_template = any(
                     hasattr(l, "name") and l.name and any(x in l.name.lower() for x in ("fara", "kapot", "resh_lines"))
