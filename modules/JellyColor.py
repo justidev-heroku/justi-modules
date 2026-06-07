@@ -856,35 +856,111 @@ def _walk_shape(shape):
         for sub in shape.shapes:
             yield from _walk_shape(sub)
 
-def find_text_target(animation: Animation):
+def count_nested_paths(item):
+    count = 0
+    if isinstance(item, Path):
+        count += 1
+    elif hasattr(item, "shapes"):
+        for s in item.shapes:
+            count += count_nested_paths(s)
+    return count
+
+def has_nested_fill(item):
+    if isinstance(item, Fill):
+        return True
+    elif hasattr(item, "shapes"):
+        for s in item.shapes:
+            if has_nested_fill(s):
+                return True
+    return False
+
+def direct_paths_count(group):
+    if not hasattr(group, "shapes"):
+        return 0
+    return sum(1 for s in group.shapes if isinstance(s, Path))
+
+def is_descendant(child, parent):
+    if child is parent:
+        return True
+    if hasattr(parent, "shapes"):
+        for s in parent.shapes:
+            if is_descendant(child, s):
+                return True
+    if hasattr(parent, "layers"):
+        for l in parent.layers:
+            if is_descendant(child, l):
+                return True
+    return False
+
+def find_text_targets(animation):
+    if isinstance(animation, dict):
+        animation = Animation.load(animation)
+        
+    # Phase 1: TextLayer
+    text_layers = []
     for el in get_all_elements(animation):
         if isinstance(el, TextLayer):
-            return el
+            text_layers.append(el)
+    if text_layers:
+        return text_layers
 
+    # Phase 2: Named groups/layers and ShapeLayers with direct paths/fills
     keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"]
+    named_targets = []
     for el in get_all_elements(animation):
-        if hasattr(el, "name") and el.name:
-            name_lower = el.name.lower()
-            if "user" not in name_lower and any(kw in name_lower for kw in keywords):
-                if isinstance(el, (Group, ShapeLayer)):
-                    return el
-
-    for el in get_all_elements(animation):
-        if isinstance(el, (Group, ShapeLayer)):
-            if hasattr(el, "name") and el.name and "user" in el.name.lower():
+        if isinstance(el, Group):
+            nm = getattr(el, "name", "") or ""
+            nm_lower = nm.lower()
+            if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
+                named_targets.append(el)
+        elif isinstance(el, ShapeLayer):
+            nm = getattr(el, "name", "") or ""
+            nm_lower = nm.lower()
+            if "user" not in nm_lower:
+                shapes = el.shapes if hasattr(el, "shapes") else []
+                n = sum(1 for s in shapes if isinstance(s, Path))
+                fl = any(isinstance(s, Fill) for s in shapes)
+                if fl and ((any(kw in nm_lower for kw in keywords) and n >= 2) or n >= 3):
+                    named_targets.append(el)
+                    
+    if named_targets:
+        final_targets = []
+        for cand in named_targets:
+            if any(is_descendant(cand, t) for t in final_targets if t is not cand):
                 continue
-            shapes = el.shapes if hasattr(el, "shapes") else []
-            paths = [s for s in shapes if isinstance(s, Path)]
-            has_fill = any(isinstance(s, Fill) for s in shapes)
-            if 2 <= len(paths) <= 15 and has_fill:
-                return el
+            final_targets.append(cand)
+        return final_targets
 
-    return None
+    # Phase 3: Fallback Heuristic
+    fallback_targets = []
+    for el in get_all_elements(animation):
+        if isinstance(el, Group):
+            nm = getattr(el, "name", "") or ""
+            nm_lower = nm.lower()
+            if "user" not in nm_lower:
+                direct_fill = hasattr(el, "shapes") and any(isinstance(s, Fill) for s in el.shapes)
+                if direct_fill:
+                    cdsh = direct_paths_count(el)
+                    cnsh = count_nested_paths(el)
+                    # Text placeholders typically have 3-12 paths
+                    if (cdsh == 0 or cdsh >= 3) and 3 <= cnsh <= 12:
+                        fallback_targets.append(el)
+                        
+    if fallback_targets:
+        final_targets = []
+        for cand in fallback_targets:
+            if any(is_descendant(cand, t) for t in final_targets if t is not cand):
+                continue
+            final_targets.append(cand)
+        return final_targets
+        
+    return []
 
-def _get_textgroup_bounds(animation):
-    target = find_text_target(animation)
-    if not target:
-        return None
+def find_text_target(animation):
+    targets = find_text_targets(animation)
+    return targets[0] if targets else None
+
+def _get_single_target_bounds(target):
     if isinstance(target, TextLayer):
         pos = target.transform.position.value
         cx, cy = (pos[0], pos[1]) if (hasattr(pos, "__len__") and len(pos) >= 2) else (0.0, 0.0)
@@ -917,6 +993,14 @@ def _get_textgroup_bounds(animation):
     if not bb.isnull():
         return (bb.x1, bb.y1, bb.x2, bb.y2)
     return None
+
+def _get_textgroup_bounds(animation):
+    if isinstance(animation, dict):
+        animation = Animation.load(animation)
+    targets = find_text_targets(animation)
+    if not targets:
+        return None
+    return _get_single_target_bounds(targets[0])
 
 def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     try:
@@ -962,10 +1046,10 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     parent_group = Group()
     parent_group.name = "JellyText_Container"
 
-    # Insert local Fill with EvenOdd rule
+    # Insert local Fill with NonZero rule
     fill_obj = Fill()
     fill_obj.name = "Fill"
-    fill_obj.fill_rule = FillRule.EvenOdd
+    fill_obj.fill_rule = FillRule.NonZero
     fill_obj.color.value = Color(1.0, 1.0, 1.0)
     parent_group.shapes.insert(0, fill_obj)
 
@@ -1071,11 +1155,7 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     
     return parent_group
 
-def _replace_textgroup(animation, new_group):
-    target = find_text_target(animation)
-    if not target:
-        return False
-
+def _replace_single_target(animation, target, new_group):
     if isinstance(target, TextLayer):
         comp = target.composition
         if not comp:
@@ -1106,7 +1186,16 @@ def _replace_textgroup(animation, new_group):
     target.shapes = [new_group, original_tr]
     return True
 
+def _replace_textgroup(animation, new_group):
+    targets = find_text_targets(animation)
+    if not targets:
+        return False
+    return _replace_single_target(animation, targets[0], new_group)
+
+
 def _find_username_bounds(animation):
+    if isinstance(animation, dict):
+        animation = Animation.load(animation)
     def walk(item):
         if isinstance(item, Group) and getattr(item, "name", "") == "USERNAME":
             verts = []
@@ -1204,25 +1293,27 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     animation = Animation.load(lottie)
     changed = False
 
-    bounds = _get_textgroup_bounds(animation)
-    if bounds:
-        x1, y1, x2, y2 = bounds
-        cx = (x1 + x2) / 2.0
-        cy = (y1 + y2) / 2.0
-        height = max(abs(y2 - y1), 5.0)
-        max_width = max(abs(x2 - x1), 5.0)
+    targets = find_text_targets(animation)
+    for target in targets:
+        bounds = _get_single_target_bounds(target)
+        if bounds:
+            x1, y1, x2, y2 = bounds
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            height = max(abs(y2 - y1), 5.0)
+            max_width = max(abs(x2 - x1), 5.0)
 
-        new_group = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width)
-        if new_group:
-            is_car_template = any(
-                hasattr(l, "name") and l.name and any(x in l.name.lower() for x in ("fara", "kapot", "resh_lines"))
-                for l in animation.layers
-            )
-            if is_car_template:
-                new_group.transform.skew.value = -10.0
-                
-            if _replace_textgroup(animation, new_group):
-                changed = True
+            new_group = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width)
+            if new_group:
+                is_car_template = any(
+                    hasattr(l, "name") and l.name and any(x in l.name.lower() for x in ("fara", "kapot", "resh_lines"))
+                    for l in animation.layers
+                )
+                if is_car_template:
+                    new_group.transform.skew.value = -10.0
+                    
+                if _replace_single_target(animation, target, new_group):
+                    changed = True
 
     if _find_username_bounds(animation):
         if _replace_username(animation, NEW_USERNAME, font_path):
