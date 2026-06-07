@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v3.9.2                     ║
+# ║                        🎨 JellyColor v3.9.3                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v3.9.2: неоновая обводка для Shape Layer и Group                 ║
+# ║  v3.9.3: обновление паков шаблонов, плейсхолдера и логирования   ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -28,8 +28,10 @@
 #
 # meta developer: @justidev
 # requires: Pillow fonttools
+#
+# modification: JellyColor update template sets, placeholder, and error logging
 
-__version__ = (3, 9, 2)
+__version__ = (3, 9, 3)
 
 import asyncio
 import glob
@@ -123,10 +125,14 @@ GRADIENT_PRESETS = [
 ]
 
 TEMPLATE_SETS = [
-    {"title": "♣️ BLACK HOLE",  "short_name": "main_by_emojicreationbot"},
+    {"title": "🖤 Чёрные", "short_name": "mainemoji_jellycolor11_by_justidev"},
+    {"title": "🖤 Чёрные 2", "short_name": "mainemoji_jellycolor5_by_justidev"},
+    {"title": "🎨 Цветные", "short_name": "mainemoji_jellycolor4_by_justidev"},
+    {"title": "🗂 Паспорт", "short_name": "mainemoji_jellycolor9_by_justidev"},
+    {"title": "✨ Эксклюзивные", "short_name": "mainemoji_jellycolor10_by_justidev"},
 ]
 
-TEMPLATE_PLACEHOLDER = "emc"
+TEMPLATE_PLACEHOLDER = "jelly"
 
 SESSION_TTL = 600
 CACHE_DIR = "/tmp/jelly_cache"
@@ -702,14 +708,14 @@ async def download_cached(client, doc) -> bytes:
         try:
             with open(path, "rb") as f:
                 return f.read()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to read cache file {path}: {e}", exc_info=True)
     data = await client.download_media(doc, bytes)
     try:
         with open(path, "wb") as f:
             f.write(data)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to write cache file {path}: {e}", exc_info=True)
     return data
 
 
@@ -1051,7 +1057,7 @@ def _replace_textgroup(lottie, new_shapes):
             nm_lower = nm.lower() if isinstance(nm, str) else ""
             if "user" not in nm_lower:
                 if obj.get("ty") == "gr" and _hfl(obj.get("it",[])):
-                    # Text placeholders like "emc" have between 3 and 12 shapes usually
+                    # Text placeholders like "jelly" have between 3 and 12 shapes usually
                     # Complex drawings like a car outline have many more
                     num_shapes = _cnsh(obj)
                     if (_cdsh(obj)==0 or _cdsh(obj)>=3) and 3 <= num_shapes <= 12:
@@ -1325,6 +1331,7 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, r
             ))
             return sn,None
         except Exception as e:
+            logger.exception(f"CreateStickerSetRequest failed for {sn}")
             if "already exists" in str(e).lower() or "already_exists" in str(e).lower():
                 try:
                     # Fetch current stickers in the set
@@ -1347,6 +1354,7 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, r
                         ))
                     return sn,None
                 except Exception as add_err:
+                    logger.exception(f"Failed to add/remove stickers for existing set {sn}")
                     if i < retries - 1:
                         continue
                     return None,str(add_err)
@@ -1567,7 +1575,9 @@ class JellyColorMod(loader.Module):
         td,tt,ts=await self._resolve_target(reply)
         if not td: await utils.answer(message,pe("❌",PE["err"])+" Стикер/эмодзи не найден."); return
         try: full_set=await self._client(functions.messages.GetStickerSetRequest(stickerset=ts,hash=0))
-        except Exception as e: await utils.answer(message,pe("❌",PE["err"])+" "+str(e)); return
+        except Exception as e:
+            logger.exception("GetStickerSetRequest failed in .j command")
+            await utils.answer(message,pe("❌",PE["err"])+" "+str(e)); return
         uid=message.sender_id; pc=len(full_set.documents)
         self._sessions[uid]={"ts":time.time(),"type":tt,"doc":td,"set_id":ts,
             "set_short":getattr(full_set.set,"short_name",""),"full_set":full_set,"pack_count":pc,
@@ -2123,6 +2133,7 @@ class JellyColorMod(loader.Module):
         try:
             await self._client.download_media(doc, dest_path)
         except Exception as e:
+            logger.exception("Failed to download font in .jaddfont command")
             await utils.answer(message, pe("❌", PE["err"]) + f" Не удалось скачать шрифт: <code>{e}</code>")
             return
             
@@ -2154,8 +2165,8 @@ class JellyColorMod(loader.Module):
         if os.path.exists(found["path"]):
             try:
                 os.remove(found["path"])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to delete font file {found['path']}: {e}", exc_info=True)
                 
         await utils.answer(message, pe("✅", PE["ok"]) + f" Шрифт <b>{found['title']}</b> удален.")
 
@@ -2329,7 +2340,9 @@ class JellyColorMod(loader.Module):
                         f"dominant_color: {get_dominant_lottie_color(lottie)}",
                         "\n--- FULL JSON ---",
                         json.dumps(lottie,indent=2,ensure_ascii=False)]
-            except Exception as e: lines.append(f"ERROR: {e}")
+            except Exception as e:
+                logger.exception("Failed to decompress and parse Lottie in .jdump command")
+                lines.append(f"ERROR: {e}")
         bd=io.BytesIO("\n".join(lines).encode()); bd.name=f"dump_{eid}.txt"; bd.seek(0)
         br=io.BytesIO(raw); br.name=f"raw_{eid}.tgs"; br.seek(0)
         # Отправляем файлы по отдельности — SendMultiMediaRequest падает на таких документах
