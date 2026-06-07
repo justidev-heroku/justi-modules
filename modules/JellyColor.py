@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.2.7                     ║
+# ║                        🎨 JellyColor v4.2.8                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.2.7: выбор при существовании пака, масштабируемый текст      ║
+# ║  v4.2.8: оптимизация соотношения сторон и размера шрифта         ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,9 +29,9 @@
 # meta developer: @justidev
 # requires: Pillow fonttools orjson
 #
-# modification: JellyColor pack exists handling, scalable text, and version bump
+# modification: JellyColor aspect ratio and font size scaling optimizations
 
-__version__ = (4, 2, 7)
+__version__ = (4, 2, 8)
 
 import asyncio
 import glob
@@ -1180,11 +1180,13 @@ def _replace_username(lottie, new_text, font_path):
                     x1, y1, x2, y2 = b
                     cx = (x1 + x2) / 2
                     cy = (y1 + y2) / 2
-                    h = max(abs(y2 - y1), 1.0)
+                    L = len(new_text)
+                    h_scale = (13.0 / max(L, 13)) ** 0.5
+                    h = max(abs(y2 - y1), 1.0) * h_scale
                     w = max(abs(x2 - x1), 1.0)
                     cx_clamped = max(30.0, min(482.0, cx))
                     canvas_max_width = 2.0 * min(cx_clamped - 30.0, 482.0 - cx_clamped)
-                    allowed_w = max(w, min(canvas_max_width, w * 2.5))
+                    allowed_w = min(canvas_max_width, w * (L / 13.0) * h_scale * 1.1)
                     ns = _text_to_lottie_shapes(
                         new_text,
                         font_path,
@@ -1339,11 +1341,13 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     bounds=_get_textgroup_bounds(lottie)
     if bounds:
         x1,y1,x2,y2=bounds; cx=(x1+x2)/2; cy=(y1+y2)/2
-        h = max(abs(y2-y1), 5.) * 1.04
+        L = len(new_text)
+        h_scale = (5.0 / max(L, 5)) ** 0.5
+        h = max(abs(y2-y1), 5.) * h_scale
         w = max(abs(x2-x1), 5.)
         cx_clamped = max(30.0, min(482.0, cx))
         canvas_max_width = 2.0 * min(cx_clamped - 30.0, 482.0 - cx_clamped)
-        allowed_w = min(canvas_max_width, max(w, min(canvas_max_width, w * 2.2)) * 1.04)
+        allowed_w = min(canvas_max_width, w * (L / 5.0) * h_scale * 1.1)
         ns=_text_to_lottie_shapes(new_text,font_path,cx,cy,h,max_width=allowed_w)
         if ns and _replace_textgroup(lottie,ns): changed=True
     if _find_username_bounds(lottie):
