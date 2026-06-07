@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v3.8.1                     ║
+# ║                        🎨 JellyColor v3.9.0                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v3.8.1: убрана авто-смена цвета текста (контрастность)           ║
+# ║  v3.9.0: неоновая обводка текста под цвет темы                    ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 8, 1)
+__version__ = (3, 9, 0)
 
 import asyncio
 import glob
@@ -1117,7 +1117,101 @@ OLD_USERNAME = "@emojicreationbot"
 NEW_USERNAME = "@freecreateemoji"
 
 
+def _dominant_color_from_gradient(colors: list) -> str:
+    if not colors:
+        return "#000000"
+    rs, gs, bs = [], [], []
+    for c in colors:
+        r, g, b = hex_to_rgb(c)
+        rs.append(r); gs.append(g); bs.append(b)
+    return rgb_to_hex(sum(rs)//len(rs), sum(gs)//len(gs), sum(bs)//len(bs))
 
+
+def _apply_neon_style_to_group(group: dict, stroke_hex: str) -> None:
+    items = group.get("it", [])
+    sr, sg, sb = hex_to_rgb(stroke_hex)
+    snr, sng, snb = sr / 255, sg / 255, sb / 255
+    
+    # 80% white + 20% chosen color for a pastel neon core
+    fnr = 0.8 + 0.2 * snr
+    fng = 0.8 + 0.2 * sng
+    fnb = 0.8 + 0.2 * snb
+    
+    fill_obj = None
+    stroke_obj = None
+    other_items = []
+    
+    for item in items:
+        if not isinstance(item, dict):
+            other_items.append(item)
+            continue
+        ty = item.get("ty")
+        if ty == "fl":
+            fill_obj = item
+        elif ty == "st":
+            stroke_obj = item
+        else:
+            other_items.append(item)
+            
+    if not fill_obj:
+        fill_obj = {
+            "ty": "fl",
+            "nm": "NeonFill",
+            "c": {"a": 0, "k": [fnr, fng, fnb, 1]},
+            "o": {"a": 0, "k": 100}
+        }
+    else:
+        c = fill_obj.setdefault("c", {})
+        c["a"] = 0
+        c["k"] = [fnr, fng, fnb, 1]
+        
+    if not stroke_obj:
+        stroke_obj = {
+            "ty": "st",
+            "nm": "NeonStroke",
+            "c": {"a": 0, "k": [snr, sng, snb, 1]},
+            "o": {"a": 0, "k": 100},
+            "w": {"a": 0, "k": 3.0},
+            "lc": 1,
+            "lj": 1
+        }
+    else:
+        c = stroke_obj.setdefault("c", {})
+        c["a"] = 0
+        c["k"] = [snr, sng, snb, 1]
+        w = stroke_obj.setdefault("w", {})
+        w["a"] = 0
+        w["k"] = 3.0
+        stroke_obj["lc"] = 1
+        stroke_obj["lj"] = 1
+        
+    shapes = [x for x in other_items if isinstance(x, dict) and x.get("ty") in ("sh", "el", "rc", "sr")]
+    non_shapes = [x for x in other_items if x not in shapes]
+    
+    # Render stroke behind fill for clean neon look
+    group["it"] = shapes + [stroke_obj, fill_obj] + non_shapes
+
+
+def _set_text_neon_style(lottie: dict, stroke_hex: str) -> None:
+    def _is_text_group(obj):
+        if not isinstance(obj, dict):
+            return False
+        if obj.get("ty") != "gr":
+            return False
+        nm = (obj.get("nm") or "").lower()
+        return "textgroup" in nm or nm == "text"
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            if _is_text_group(obj):
+                _apply_neon_style_to_group(obj, stroke_hex)
+            for v in obj.values():
+                _walk(v)
+        elif isinstance(obj, list):
+            for x in obj:
+                _walk(x)
+
+    _walk(lottie)
 
 
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
@@ -1941,8 +2035,15 @@ class JellyColorMod(loader.Module):
                     modify_lottie(lottie_obj, txt, s.get("font_path"))
                     if gradient:
                         apply_gradient_lottie(lottie_obj, gradient)
+                        outline_color = _dominant_color_from_gradient(gradient["colors"])
                     elif color:
                         tint_lottie(lottie_obj, color)
+                        outline_color = color
+                    else:
+                        outline_color = None
+                        
+                    if outline_color:
+                        _set_text_neon_style(lottie_obj, outline_color)
                     return compress_tgs(lottie_obj)
                 patched = await loop.run_in_executor(None, _process_tgs)
                 buf=io.BytesIO(patched); buf.name="sticker.tgs"
