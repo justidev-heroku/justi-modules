@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.1.0                     ║
+# ║                        🎨 JellyColor v4.1.1                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.1.0: оптимизация скорости (orjson, 1D-градиенты, быстрое сжатие TGS) ║
+# ║  v4.1.1: оптимизация скорости (orjson, 1D-градиенты, быстрое сжатие TGS) ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,7 +31,7 @@
 #
 # modification: JellyColor speed optimizations (orjson, 1D-gradients, fast TGS compression)
 
-__version__ = (4, 1, 0)
+__version__ = (4, 1, 1)
 
 import asyncio
 import glob
