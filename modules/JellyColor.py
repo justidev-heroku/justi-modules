@@ -27,7 +27,7 @@
 # SOFTWARE.
 #
 # meta developer: @justidev
-# requires: Pillow fonttools
+# requires: Pillow fonttools lottie
 
 __version__ = (3, 8, 4)
 
