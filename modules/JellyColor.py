@@ -1531,13 +1531,13 @@ class JellyColorMod(loader.Module):
                     logchat_id,
                     debug_files[0],
                     caption=msg_text,
-                    message_thread_id=topic_id
+                    reply_to=topic_id
                 )
             else:
                 await self._client.send_message(
                     logchat_id,
                     msg_text,
-                    message_thread_id=topic_id
+                    reply_to=topic_id
                 )
         except Exception as ex:
             logger.error(f"Failed to report error to logchat: {ex}", exc_info=True)
