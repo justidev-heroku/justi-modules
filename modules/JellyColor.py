@@ -812,6 +812,8 @@ def _ensure_font():
 
 from lottie.objects import Animation, TextLayer, Group, ShapeLayer, Path, Fill, TransformShape, Bezier, NVector, Color, FillRule, BoundingBox
 from typing import Any
+import logging
+logger = logging.getLogger("JellyColor")
 
 def should_ignore(item):
     name = (getattr(item, "name", "") or "").lower()
@@ -893,6 +895,7 @@ def is_descendant(child, parent):
     return False
 
 def find_text_targets(animation):
+    logger.info("find_text_targets: search initiated")
     if isinstance(animation, dict):
         animation = Animation.load(animation)
         
@@ -902,6 +905,7 @@ def find_text_targets(animation):
         if isinstance(el, TextLayer):
             text_layers.append(el)
     if text_layers:
+        logger.info(f"find_text_targets (Phase 1): found {len(text_layers)} native TextLayers: {[getattr(t, 'name', None) for t in text_layers]}")
         return text_layers
 
     # Phase 2: Named groups/layers and ShapeLayers with direct paths/fills
@@ -929,6 +933,7 @@ def find_text_targets(animation):
             if any(is_descendant(cand, t) for t in final_targets if t is not cand):
                 continue
             final_targets.append(cand)
+        logger.info(f"find_text_targets (Phase 2): found {len(final_targets)} named targets: {[getattr(t, 'name', None) for t in final_targets]}")
         return final_targets
 
     # Phase 3: Fallback Heuristic
@@ -952,8 +957,10 @@ def find_text_targets(animation):
             if any(is_descendant(cand, t) for t in final_targets if t is not cand):
                 continue
             final_targets.append(cand)
+        logger.info(f"find_text_targets (Phase 3 Fallback): found {len(final_targets)} targets: {[getattr(t, 'name', None) for t in final_targets]}")
         return final_targets
         
+    logger.warning("find_text_targets: no text target candidates found in the animation!")
     return []
 
 def find_text_target(animation):
@@ -961,6 +968,7 @@ def find_text_target(animation):
     return targets[0] if targets else None
 
 def _get_single_target_bounds(target):
+    logger.info(f"_get_single_target_bounds: target={type(target).__name__} (name={getattr(target, 'name', None)})")
     if isinstance(target, TextLayer):
         pos = target.transform.position.value
         cx, cy = (pos[0], pos[1]) if (hasattr(pos, "__len__") and len(pos) >= 2) else (0.0, 0.0)
@@ -994,10 +1002,14 @@ def _get_single_target_bounds(target):
             if hasattr(doc, "wrap_position") and doc.wrap_position is not None:
                 wrap_position = doc.wrap_position
         
+        logger.info(f"TextLayer params: text={repr(text)}, font_size={font_size}, justify={justify}, baseline_shift={baseline_shift}, line_height={line_height}, wrap_size={wrap_size}, wrap_position={wrap_position}")
+        
         if wrap_size and hasattr(wrap_size, "__len__") and len(wrap_size) >= 2 and wrap_size[0] > 0 and wrap_size[1] > 0:
             px, py = (wrap_position[0], wrap_position[1]) if (wrap_position and hasattr(wrap_position, "__len__") and len(wrap_position) >= 2) else (0.0, 0.0)
             w, h = wrap_size[0], wrap_size[1]
-            return (cx + px, cy + py, cx + px + w, cy + py + h)
+            bounds = (cx + px, cy + py, cx + px + w, cy + py + h)
+            logger.info(f"TextLayer bounds (wrap box): {bounds}")
+            return bounds
             
         # Point text: estimate bounds based on lines and justification
         lines = text.replace("\r", "\n").split("\n")
@@ -1020,7 +1032,9 @@ def _get_single_target_bounds(target):
         # bottom of last line is at cy - baseline_shift + (L - 1) * line_height + 0.2 * font_size
         y1 = cy - baseline_shift - 0.8 * font_size
         y2 = cy - baseline_shift + (L - 1) * line_height + 0.2 * font_size
-        return (x1, y1, x2, y2)
+        bounds = (x1, y1, x2, y2)
+        logger.info(f"TextLayer bounds (point text estimation): {bounds}")
+        return bounds
 
     paths = []
     def collect_paths(item):
@@ -1038,7 +1052,10 @@ def _get_single_target_bounds(target):
         if p.shape and p.shape.value:
             bb.expand(p.bounding_box(0))
     if not bb.isnull():
-        return (bb.x1, bb.y1, bb.x2, bb.y2)
+        bounds = (bb.x1, bb.y1, bb.x2, bb.y2)
+        logger.info(f"Shape/Group bounds calculated from {len(paths)} paths: {bounds}")
+        return bounds
+    logger.warning("Shape/Group bounds calculation: bounding box is empty!")
     return None
 
 def _get_textgroup_bounds(animation):
@@ -1050,11 +1067,12 @@ def _get_textgroup_bounds(animation):
     return _get_single_target_bounds(targets[0])
 
 def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None, justify=2, line_spacing=1.2):
+    logger.info(f"_text_to_lottie_shapes: text={repr(text)}, cx={cx}, cy={cy}, height={height}, max_width={max_width}, justify={justify}, line_spacing={line_spacing}")
     try:
         from fontTools.ttLib import TTFont
         from fontTools.pens.recordingPen import DecomposingRecordingPen
     except ImportError as e:
-        import logging; logging.getLogger("JellyColor").error(f"fontTools: {e}")
+        logger.error(f"Failed to import fontTools: {e}")
         return None
 
     ft = TTFont(font_path)
@@ -1065,6 +1083,8 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None, just
     cap_h = float(getattr(os2, "sCapHeight", 0) or getattr(os2, "sTypoAscender", upm * 0.72))
     if cap_h <= 0:
         cap_h = upm * 0.72
+
+    logger.info(f"Font loaded: UPM={upm}, cap_h={cap_h}")
 
     # Parse all lines
     lines = text.replace("\r", "\n").split("\n")
@@ -1078,7 +1098,7 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None, just
     # For each line, gather glyphs and compute total advance
     lines_glyphs = []
     max_line_width = 0.0
-    for line in lines:
+    for idx, line in enumerate(lines):
         glyph_list = []
         line_adv = 0.0
         for ch in line:
@@ -1095,6 +1115,7 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None, just
             glyph_list.append((gn, adv))
             line_adv += adv
         lines_glyphs.append((glyph_list, line_adv))
+        logger.info(f"Line {idx} advance: {line_adv} (text={repr(line)})")
         if line_adv > max_line_width:
             max_line_width = line_adv
 
@@ -1104,8 +1125,11 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None, just
     scale_y = sc * 100.0
     if max_width and (max_line_width * sc) > max_width:
         scale_x = (max_width / max_line_width) * 100.0
+        logger.info(f"Text width {max_line_width * sc} exceeds max_width {max_width}. Scaling horizontally.")
     else:
         scale_x = sc * 100.0
+
+    logger.info(f"Calculated scale: scale_x={scale_x}%, scale_y={scale_y}%, sc={sc}")
 
     parent_group = Group()
     parent_group.name = "JellyText_Container"
@@ -1127,6 +1151,7 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None, just
 
         # Calculate baseline y for this line in local coordinate system
         baseline_y = cap_h * ( - (1.0 + (L - 1) * line_spacing) / 2.0 + 1.0 + line_idx * line_spacing )
+        logger.info(f"Line {line_idx} positioning: start_x={start_x}, baseline_y={baseline_y}")
 
         cur_x = 0.0
         for char_idx, (gn, adv) in enumerate(glyph_list):
@@ -1228,9 +1253,11 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None, just
     return parent_group
 
 def _replace_single_target(animation, target, new_group):
+    logger.info(f"_replace_single_target: replacing target={type(target).__name__} (name={getattr(target, 'name', None)})")
     if isinstance(target, TextLayer):
         comp = target.composition
         if not comp:
+            logger.error("TextLayer target composition is None")
             return False
         new_layer = ShapeLayer()
         new_layer.name = target.name or "Text Shape"
@@ -1244,18 +1271,22 @@ def _replace_single_target(animation, target, new_group):
             idx = comp.layers.index(target)
             comp.layers.insert(idx, new_layer)
             comp.layers.remove(target)
+            logger.info("Successfully replaced TextLayer with ShapeLayer containing generated vectors")
         except ValueError:
             comp.add_layer(new_layer)
+            logger.warning("Could not find TextLayer in composition list. Appended new layer instead.")
         return True
 
     if isinstance(target, ShapeLayer):
         target.shapes = [new_group]
+        logger.info("Successfully replaced target ShapeLayer shapes with generated vectors")
         return True
 
     original_tr = next((s for s in target.shapes if isinstance(s, TransformShape)), None)
     if not original_tr:
         original_tr = TransformShape()
     target.shapes = [new_group, original_tr]
+    logger.info("Successfully replaced shapes of target Group with generated vectors and preserved transform")
     return True
 
 def _replace_textgroup(animation, new_group):
@@ -1303,8 +1334,10 @@ def _find_username_bounds(animation):
     return None
 
 def _replace_username(animation, new_text, font_path):
+    logger.info("_replace_username: search for USERNAME initiated")
     res = _find_username_bounds(animation)
     if not res:
+        logger.warning("USERNAME target not found in animation")
         return False
     bounds, grp = res
     x1, y1, x2, y2 = bounds
@@ -1312,9 +1345,11 @@ def _replace_username(animation, new_text, font_path):
     cy = (y1 + y2) / 2.0
     height = max(abs(y2 - y1), 1.0)
     max_width = max(abs(x2 - x1), 1.0)
+    logger.info(f"USERNAME target bounds: {bounds}, center=({cx}, {cy}), size=({max_width}x{height})")
 
     new_group = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width)
     if not new_group:
+        logger.error("Failed to generate vector shapes for username text")
         return False
 
     old_shapes = grp.shapes
@@ -1326,6 +1361,7 @@ def _replace_username(animation, new_text, font_path):
             preserved.append(s)
 
     grp.shapes = [new_group] + preserved
+    logger.info("Successfully replaced USERNAME shapes")
     return True
 
 OLD_USERNAME = "@emojicreationbot"
@@ -1357,15 +1393,18 @@ def _set_text_fill_color(lottie: Any, hex_color: str) -> None:
         lottie.update(animation.to_dict())
 
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
+    logger.info(f"modify_lottie call: new_text={repr(new_text)}")
     if not font_path:
         font_path = _ensure_font()
     if not font_path:
+        logger.error("Could not obtain Comfortaa font path")
         return False
 
     animation = Animation.load(lottie)
     changed = False
 
     targets = find_text_targets(animation)
+    logger.info(f"modify_lottie: found {len(targets)} potential target(s)")
     for target in targets:
         bounds = _get_single_target_bounds(target)
         if bounds:
@@ -1387,6 +1426,7 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
                     if hasattr(doc, "line_height") and doc.line_height and hasattr(doc, "font_size") and doc.font_size:
                         line_spacing = doc.line_height / doc.font_size
 
+            logger.info(f"Processing replacement target {getattr(target, 'name', None)}: bounds={bounds}, center=({cx}, {cy}), height={height}, max_width={max_width}, justify={justify}, line_spacing={line_spacing}")
             new_group = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width, justify=justify, line_spacing=line_spacing)
             if new_group:
                 is_car_template = any(
@@ -1394,19 +1434,23 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
                     for l in animation.layers
                 )
                 if is_car_template:
+                    logger.info("Car template detected! Applying skew transformation (-10.0 degrees)")
                     new_group.transform.skew.value = -10.0
                     
                 if _replace_single_target(animation, target, new_group):
                     changed = True
 
     if _find_username_bounds(animation):
+        logger.info("Username placeholder bounds detected, executing username swap.")
         if _replace_username(animation, NEW_USERNAME, font_path):
             changed = True
 
     if changed:
+        logger.info("modify_lottie: modifications complete. Exporting back to dictionary.")
         lottie.clear()
         lottie.update(animation.to_dict())
-
+    else:
+        logger.warning("modify_lottie: no modifications were applied")
     return changed
 
 def replace_text_in_tgs(tgs_bytes: bytes, old_text: str, new_text: str, font_path: str = None) -> bytes:
