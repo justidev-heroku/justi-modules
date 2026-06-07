@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.1.2                     ║
+# ║                        🔮 JellyParser v0.1.3                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║            v0.1.2: замена юзернейма-заглушки на JellyColor       ║
+# ║            v0.1.3: строгая фильтрация текстовых слоев            ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -53,7 +53,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 1, 2)
+__version__ = (0, 1, 3)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -180,75 +180,52 @@ def _verts_to_bounds(verts):
 def _get_textgroup_bounds(lottie):
     def find_named(obj):
         if isinstance(obj, dict):
-            if obj.get("ty")=="gr" and obj.get("nm")=="TextGroup":
-                b=_verts_to_bounds(_collect_path_verts(obj))
-                if b: return b
+            if obj.get("ty") == "gr":
+                nm = obj.get("nm", "")
+                if isinstance(nm, str) and nm:
+                    nm_lower = nm.lower()
+                    if "user" not in nm_lower and "text" in nm_lower:
+                        b = _verts_to_bounds(_collect_path_verts(obj))
+                        if b:
+                            return b
             for v in obj.values():
-                r=find_named(v)
-                if r: return r
+                r = find_named(v)
+                if r:
+                    return r
         elif isinstance(obj, list):
             for item in obj:
-                r=find_named(item)
-                if r: return r
+                r = find_named(item)
+                if r:
+                    return r
         return None
-    b=find_named(lottie)
-    if b: return b
+    b = find_named(lottie)
+    if b:
+        return b
 
     def find_text_layer(layers):
         for layer in layers:
-            if layer.get("ty")!=4: continue
-            nm=layer.get("nm",""); shapes=layer.get("shapes",[])
-            n_sh=sum(1 for s in shapes if s.get("ty")=="sh")
-            has_fl=any(s.get("ty")=="fl" for s in shapes)
-            if ("text" in nm.lower() or "Text" in nm) and n_sh>=2 and has_fl:
-                b=_verts_to_bounds(_collect_path_verts({"shapes":shapes}))
-                if b: return b
+            if layer.get("ty") != 4:
+                continue
+            nm = layer.get("nm", "")
+            shapes = layer.get("shapes", [])
+            if not isinstance(nm, str):
+                continue
+            nm_lower = nm.lower()
+            if "user" in nm_lower:
+                continue
+            n_sh = sum(1 for s in shapes if s.get("ty") == "sh")
+            has_fl = any(s.get("ty") == "fl" for s in shapes)
+            if "text" in nm_lower and n_sh >= 2 and has_fl:
+                b = _verts_to_bounds(_collect_path_verts({"shapes": shapes}))
+                if b:
+                    return b
         return None
 
-    all_ll=[lottie.get("layers",[])]+[a.get("layers",[]) for a in lottie.get("assets",[])]
+    all_ll = [lottie.get("layers", [])] + [a.get("layers", []) for a in lottie.get("assets", [])]
     for ll in all_ll:
-        b=find_text_layer(ll)
-        if b: return b
-
-    def _gfl(gr): return any(x.get("ty")=="fl" for x in gr.get("it",[]))
-    def _cdsh(gr): return sum(1 for x in gr.get("it",[]) if x.get("ty")=="sh")
-    def _cnsh(gr):
-        n=0
-        for x in gr.get("it",[]):
-            n+=1 if x.get("ty")=="sh" else (_cnsh(x) if x.get("ty")=="gr" else 0)
-        return n
-
-    matched = []
-    def walk(obj, path=()):
-        if isinstance(obj, dict):
-            if obj.get("ty")=="gr" and _gfl(obj) and (_cdsh(obj)==0 or _cdsh(obj)>=3) and _cnsh(obj)>=3:
-                matched.append((obj, path))
-            for k, v in obj.items():
-                walk(v, path + (k,))
-        elif isinstance(obj, list):
-            for i, x in enumerate(obj):
-                walk(x, path + (i,))
-
-    walk(lottie)
-
-    filtered_matched = []
-    for gr1, p1 in matched:
-        is_ancestor = False
-        for gr2, p2 in matched:
-            if len(p1) < len(p2) and p2[:len(p1)] == p1:
-                is_ancestor = True
-                break
-        if not is_ancestor:
-            filtered_matched.append(gr1)
-
-    for gr in filtered_matched:
-        verts = _collect_path_verts(gr)
-        if verts:
-            xs=[v[0] for v in verts]; ys=[v[1] for v in verts]
-            w=max(xs)-min(xs); h=max(ys)-min(ys)+1e-9
-            if w>h*1.3 or w>0:
-                b = _verts_to_bounds(verts)
-                if b: return b
+        b = find_text_layer(ll)
+        if b:
+            return b
 
     return None
 
@@ -332,15 +309,15 @@ def _replace_textgroup(lottie, new_shapes):
         lst[:]=new_shapes+style
         patched_any = True
 
-    # 1. Try to find by explicit names: "TextGroup", "Text", "text" (excluding username)
+    # 1. Try to find by explicit names containing "text" (excluding username)
     matched_named = []
     def walk_named(obj, path=()):
         if isinstance(obj, dict):
             nm = obj.get("nm", "")
             if isinstance(nm, str) and nm:
                 nm_lower = nm.lower()
-                if "user" not in nm_lower:
-                    if obj.get("ty") == "gr" and ("textgroup" in nm_lower or nm_lower == "text"):
+                if "user" not in nm_lower and "text" in nm_lower:
+                    if obj.get("ty") == "gr":
                         matched_named.append((obj, path))
             for k, v in obj.items():
                 walk_named(v, path + (k,))
@@ -375,52 +352,11 @@ def _replace_textgroup(lottie, new_shapes):
             if "user" in nm_lower: continue
             n=sum(1 for s in shapes if s.get("ty")=="sh")
             fl=any(s.get("ty")=="fl" for s in shapes)
-            if ("text" in nm_lower and n>=2 and fl) or (n>=3 and fl):
+            if "text" in nm_lower and n>=2 and fl:
                 _patch(shapes)
 
     for ll in [lottie.get("layers",[])]+[a.get("layers",[]) for a in lottie.get("assets",[])]:  
         try_ll(ll)
-
-    if patched_any:
-        return True
-
-    # 3. Fallback heuristic
-    def _cdsh(gr): return sum(1 for x in gr.get("it",[]) if x.get("ty")=="sh")
-    def _cnsh(gr):
-        n=0
-        for x in gr.get("it",[]):
-            n+=1 if x.get("ty")=="sh" else (_cnsh(x) if x.get("ty")=="gr" else 0)
-        return n
-
-    matched_heuristic = []
-    def walk_heuristic(obj, path=()):
-        if isinstance(obj, dict):
-            nm = obj.get("nm", "")
-            nm_lower = nm.lower() if isinstance(nm, str) else ""
-            if "user" not in nm_lower:
-                if obj.get("ty") == "gr" and any(x.get("ty")=="fl" for x in obj.get("it",[])):
-                    num_shapes = _cnsh(obj)
-                    if (_cdsh(obj)==0 or _cdsh(obj)>=3) and 3 <= num_shapes <= 12:
-                        matched_heuristic.append((obj, path))
-            for k, v in obj.items():
-                walk_heuristic(v, path + (k,))
-        elif isinstance(obj, list):
-            for i, x in enumerate(obj):
-                walk_heuristic(x, path + (i,))
-
-    walk_heuristic(lottie)
-    if matched_heuristic:
-        filtered = []
-        for gr1, p1 in matched_heuristic:
-            is_ancestor = False
-            for gr2, p2 in matched_heuristic:
-                if len(p1) < len(p2) and p2[:len(p1)] == p1:
-                    is_ancestor = True
-                    break
-            if not is_ancestor:
-                filtered.append(gr1)
-        for gr in filtered:
-            _patch(gr.setdefault("it", []))
 
     return patched_any
 
