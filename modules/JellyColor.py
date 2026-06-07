@@ -1361,7 +1361,7 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, r
 class JellyColorMod(loader.Module):
     """Перекраска + текстовые шаблоны с поддержкой пользовательских шрифтов.
     Ускорена генерация паков эмодзи и добавлено управление шрифтами (.jaddfont, .jdelfont, .jfonts).
-    Команды: .j .jc .jt .tstats .jdel .jexport .jdump .jaddfont .jdelfont .jfonts"""
+    Команды: .j .jc .jt .jstats .jdel .jexport .jdump .jaddfont .jdelfont .jfonts"""
 
     strings = {"name": "JellyColor"}
 
@@ -2204,10 +2204,10 @@ class JellyColorMod(loader.Module):
             lines.append(f"<b>{i}.</b> {f['title']} (<code>{os.path.basename(f['path'])}</code>)")
         await utils.answer(message, "\n".join(lines), parse_mode="HTML")
 
-    # ─── .tstats ──────────────────────────────────────────────────────────────
+    # ─── .jstats ──────────────────────────────────────────────────────────────
 
     @loader.command()
-    async def tstats(self, message: Message):
+    async def jstats(self, message: Message):
         """Статистика операций"""
         stats=self.db.get("JellyColor","stats",[])
         if not stats: await utils.answer(message,pe("📊",PE["stats"])+" Пусто."); return
