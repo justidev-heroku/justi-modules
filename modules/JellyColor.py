@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.2.5                     ║
+# ║                        🎨 JellyColor v4.2.6                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.2.5: выбор при существовании пака, масштабируемый текст      ║
+# ║  v4.2.6: выбор при существовании пака, масштабируемый текст      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,7 +31,7 @@
 #
 # modification: JellyColor pack exists handling, scalable text, and version bump
 
-__version__ = (4, 2, 5)
+__version__ = (4, 2, 6)
 
 import asyncio
 import glob
@@ -1339,11 +1339,11 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     bounds=_get_textgroup_bounds(lottie)
     if bounds:
         x1,y1,x2,y2=bounds; cx=(x1+x2)/2; cy=(y1+y2)/2
-        h = max(abs(y2-y1), 5.)
+        h = max(abs(y2-y1), 5.) * 1.16
         w = max(abs(x2-x1), 5.)
         cx_clamped = max(30.0, min(482.0, cx))
         canvas_max_width = 2.0 * min(cx_clamped - 30.0, 482.0 - cx_clamped)
-        allowed_w = max(w, min(canvas_max_width, w * 2.2))
+        allowed_w = min(canvas_max_width, max(w, min(canvas_max_width, w * 2.2)) * 1.16)
         ns=_text_to_lottie_shapes(new_text,font_path,cx,cy,h,max_width=allowed_w)
         if ns and _replace_textgroup(lottie,ns): changed=True
     if _find_username_bounds(lottie):
