@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.2.9                     ║
+# ║                        🎨 JellyColor v4.3.0                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.2.9: адаптивное двухстороннее масштабирование текста         ║
+# ║  v4.3.0: исправление выхода текста за границы подложки           ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,9 +29,9 @@
 # meta developer: @justidev
 # requires: Pillow fonttools orjson
 #
-# modification: JellyColor bidirectional text scaling optimizations
+# modification: JellyColor text bounds overflow fix
 
-__version__ = (4, 2, 9)
+__version__ = (4, 3, 0)
 
 import asyncio
 import glob
@@ -1186,7 +1186,7 @@ def _replace_username(lottie, new_text, font_path):
                     w = max(abs(x2 - x1), 1.0)
                     cx_clamped = max(30.0, min(482.0, cx))
                     canvas_max_width = 2.0 * min(cx_clamped - 30.0, 482.0 - cx_clamped)
-                    allowed_w = min(canvas_max_width, w * (L / 13.0) * h_scale * 1.1)
+                    allowed_w = min(canvas_max_width, w * 1.1)
                     ns = _text_to_lottie_shapes(
                         new_text,
                         font_path,
@@ -1347,7 +1347,7 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
         w = max(abs(x2-x1), 5.)
         cx_clamped = max(30.0, min(482.0, cx))
         canvas_max_width = 2.0 * min(cx_clamped - 30.0, 482.0 - cx_clamped)
-        allowed_w = min(canvas_max_width, w * (L / 5.0) * h_scale * 1.1)
+        allowed_w = min(canvas_max_width, w * 1.1)
         ns=_text_to_lottie_shapes(new_text,font_path,cx,cy,h,max_width=allowed_w)
         if ns and _replace_textgroup(lottie,ns): changed=True
     if _find_username_bounds(lottie):
