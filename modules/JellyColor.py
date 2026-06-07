@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.3.0                     ║
+# ║                        🎨 JellyColor v4.3.1                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.3.0: исправление выхода текста за границы подложки           ║
+# ║  v4.3.1: исправление повторного создания существующих паков     ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,9 +29,9 @@
 # meta developer: @justidev
 # requires: Pillow fonttools orjson
 #
-# modification: JellyColor text bounds overflow fix
+# modification: JellyColor existing pack update fix
 
-__version__ = (4, 3, 0)
+__version__ = (4, 3, 1)
 
 import asyncio
 import glob
@@ -1445,7 +1445,7 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
             return sn,None
         except Exception as e:
             logger.exception(f"CreateStickerSetRequest failed for {sn}")
-            if "already exists" in str(e).lower() or "already_exists" in str(e).lower():
+            if "already exists" in str(e).lower() or "already_exists" in str(e).lower() or "short_name_occupied" in str(e).lower():
                 try:
                     # Fetch current stickers in the set
                     fs = await client(functions.messages.GetStickerSetRequest(
