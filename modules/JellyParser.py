@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.1.1                     ║
+# ║                        🔮 JellyParser v0.1.2                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║                  v0.1.1: замена текста на jelly                  ║
+# ║            v0.1.2: замена юзернейма-заглушки на JellyColor       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -53,7 +53,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 1, 1)
+__version__ = (0, 1, 2)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -78,6 +78,7 @@ CONCURRENCY = 12
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 TEMPLATE_PLACEHOLDER = "emc"
+NEW_USERNAME = "JellyColor"
 
 _FONT_SEARCH = [
     "/usr/share/fonts/truetype/comfortaa/Comfortaa-Bold.ttf",
@@ -424,6 +425,54 @@ def _replace_textgroup(lottie, new_shapes):
     return patched_any
 
 
+def _find_username_bounds(lottie):
+    def walk(obj):
+        if isinstance(obj, dict):
+            if obj.get("ty") == "gr" and obj.get("nm") == "USERNAME":
+                b = _verts_to_bounds(_collect_path_verts(obj))
+                if b:
+                    return b, obj
+            for v in obj.values():
+                r = walk(v)
+                if r:
+                    return r
+        elif isinstance(obj, list):
+            for item in obj:
+                r = walk(item)
+                if r:
+                    return r
+        return None
+    return walk(lottie)
+
+
+def _replace_username(lottie, new_text, font_path):
+    res = _find_username_bounds(lottie)
+    if not res:
+        return False
+    bounds, grp = res
+    x1, y1, x2, y2 = bounds
+    ns = _text_to_lottie_shapes(
+        new_text,
+        font_path,
+        (x1 + x2) / 2,
+        (y1 + y2) / 2,
+        max(abs(y2 - y1), 1.0),
+        max_width=max(abs(x2 - x1), 1.0),
+    )
+    if not ns:
+        return False
+    items = grp.setdefault("it", [])
+    def _hfl(lst):
+        return any(x.get("ty") == "fl" for x in lst)
+    style = [
+        x for x in items
+        if x.get("ty") not in ("sh", "el", "rc", "sr")
+        and not (x.get("ty") == "gr" and not _hfl(x.get("it", [])))
+    ]
+    items[:] = ns + style
+    return True
+
+
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if not font_path:
         font_path = _ensure_font()
@@ -437,6 +486,9 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
         cy = (y1 + y2) / 2
         ns = _text_to_lottie_shapes(new_text, font_path, cx, cy, max(abs(y2 - y1), 5.), max_width=max(abs(x2 - x1), 5.))
         if ns and _replace_textgroup(lottie, ns):
+            changed = True
+    if _find_username_bounds(lottie):
+        if _replace_username(lottie, NEW_USERNAME, font_path):
             changed = True
     return changed
 
