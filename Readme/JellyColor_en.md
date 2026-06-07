@@ -43,7 +43,7 @@ Current version: **v3.7.0**.
 | `.jaddgrad <name> <HEX,HEX,...> [h/v/d/dr]` | Save a custom color gradient |
 | `.jdelgrad <name>` | Delete a custom color gradient |
 | `.jgrads` | List all available system and custom gradients |
-| `.tstats` | Statistics of creation operations |
+| `.jstats` | Statistics of creation operations |
 | `.jdel <short_name>` | Delete a pack entry from statistics |
 | `.jexport` | Export creation stats to JSON |
 

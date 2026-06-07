@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v3.9.0                     ║
+# ║                        🎨 JellyColor v3.9.1                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v3.9.0: неоновая обводка текста под цвет темы                    ║
+# ║  v3.9.1: неоновая обводка, без превью, переименована jstats       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 9, 0)
+__version__ = (3, 9, 1)
 
 import asyncio
 import glob
@@ -124,8 +124,6 @@ GRADIENT_PRESETS = [
 
 TEMPLATE_SETS = [
     {"title": "♣️ BLACK HOLE",  "short_name": "main_by_emojicreationbot"},
-    {"title": "🎨 COLOR",       "short_name": "testmain1_by_justidev"},
-    {"title": "🌀 ALL IN ALL",  "short_name": "SpizdiAllEmojis"},
 ]
 
 TEMPLATE_PLACEHOLDER = "emc"
@@ -1354,7 +1352,7 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, r
 class JellyColorMod(loader.Module):
     """Перекраска + текстовые шаблоны с поддержкой пользовательских шрифтов.
     Ускорена генерация паков эмодзи и добавлено управление шрифтами (.jaddfont, .jdelfont, .jfonts).
-    Команды: .j .jc .jt .tstats .jdel .jexport .jdump .jaddfont .jdelfont .jfonts"""
+    Команды: .j .jc .jt .jstats .jdel .jexport .jdump .jaddfont .jdelfont .jfonts"""
 
     strings = {"name": "JellyColor"}
 
@@ -1828,7 +1826,7 @@ class JellyColorMod(loader.Module):
         if step=="template": return pe("🖤",PE["brush"])+" <b>Выберите шаблон</b>\n\nТекст <code>"+TEMPLATE_PLACEHOLDER+"</code> будет заменён на ваш."
         if step=="text": return pe("✍️",PE["write"])+f" <b>Введите текст</b>\n\nШаблон: <b>{s['template']['title']}</b>\n2-4 символа — оптимально."
         if step=="font": return pe("✍️",PE["write"])+f" <b>Выберите шрифт</b>\n\nТекст: <code>{s['text']}</code>"
-        if step=="preview": return pe("👁",PE["eye"])+f" <b>Предпросмотр</b>\n\nТекст: <code>{s['text']}</code> (Шрифт: <b>{s.get('font_title','Comfortaa')}</b>)\nСмотрите на тестовый эмодзи выше."
+        if step=="preview": return f"Ник <b>{s['text']}</b> оставить?"
         if step=="color":
             hist=self._color_history()
             hs=("\n"+pe("⏰",PE["clock"])+" Последние: "+"  ".join(f"<code>{c}</code>" for c in hist)) if hist else ""
@@ -1850,8 +1848,8 @@ class JellyColorMod(loader.Module):
                 buttons.append([{"text": f["title"], "icon_custom_emoji_id": PE["sticker"], "callback": self._jt_font_sel, "args": (uid, f["title"])}])
             return buttons
         if step=="preview": return [[
-            {"text":"✅ Хорошо","icon_custom_emoji_id":PE["ok"],"callback":self._jt_confirm,"args":(uid,)},
-            {"text":"✏️ Изменить","icon_custom_emoji_id":PE["palette"],"callback":self._jt_retry,"args":(uid,)},
+            {"text":"Да","icon_custom_emoji_id":PE["ok"],"callback":self._jt_confirm,"args":(uid,)},
+            {"text":"Изменить","icon_custom_emoji_id":PE["palette"],"callback":self._jt_retry,"args":(uid,)},
         ]]
         if step=="color":
             rows=self._color_rows_with_gradient(uid,self._jt_col,self._jt_hex,self._jt_open_grad,
@@ -1898,43 +1896,16 @@ class JellyColorMod(loader.Module):
                 s["font_title"] = "Comfortaa"
         s["step"] = "preview"
         await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-        asyncio.ensure_future(self._jt_preview(call, uid))
-
-    async def _jt_preview(self,call,uid):
-        s=self._tsessions.get(uid)
-        if not s: return
-        try:
-            fs=await self._client(functions.messages.GetStickerSetRequest(
-                stickerset=types.InputStickerSetShortName(short_name=s["template"]["short_name"]),hash=0))
-            doc=fs.documents[0]
-            raw=await download_cached(self._client,doc)
-            mime=getattr(doc,"mime_type","")
-            if mime=="application/x-tgsticker":
-                loop = asyncio.get_event_loop()
-                pat = await loop.run_in_executor(None, replace_text_in_tgs, raw, TEMPLATE_PLACEHOLDER, s["text"], s.get("font_path"))
-                buf=io.BytesIO(pat); buf.name="preview.tgs"
-            else:
-                buf=io.BytesIO(raw); buf.name="preview.webp"
-            buf.seek(0)
-            s["preview_msg"]=await self._client.send_file(
-                call.chat_id,buf,caption=pe("👁",PE["eye"])+" <b>Preview: "+s["text"]+"</b>",parse_mode="HTML")
-        except Exception: pass
 
     async def _jt_confirm(self,call,uid):
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        if s.get("preview_msg"):
-            try: await s["preview_msg"].delete()
-            except Exception: pass
         s["step"]="color"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
     async def _jt_retry(self,call,uid):
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        if s.get("preview_msg"):
-            try: await s["preview_msg"].delete()
-            except Exception: pass
         s["step"]="text"; s["text"]=None
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
@@ -2192,10 +2163,10 @@ class JellyColorMod(loader.Module):
             lines.append(f"<b>{i}.</b> {f['title']} (<code>{os.path.basename(f['path'])}</code>)")
         await utils.answer(message, "\n".join(lines), parse_mode="HTML")
 
-    # ─── .tstats ──────────────────────────────────────────────────────────────
+    # ─── .jstats ──────────────────────────────────────────────────────────────
 
     @loader.command()
-    async def tstats(self, message: Message):
+    async def jstats(self, message: Message):
         """Статистика операций"""
         stats=self.db.get("JellyColor","stats",[])
         if not stats: await utils.answer(message,pe("📊",PE["stats"])+" Пусто."); return
