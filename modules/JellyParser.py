@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.1.3                     ║
+# ║                        🔮 JellyParser v0.1.4                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║            v0.1.3: строгая фильтрация текстовых слоев            ║
+# ║        v0.1.4: поддержка Shape Layer USERNAME-плейсхолдера       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -53,7 +53,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 1, 3)
+__version__ = (0, 1, 4)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -364,7 +364,7 @@ def _replace_textgroup(lottie, new_shapes):
 def _find_username_bounds(lottie):
     def walk(obj):
         if isinstance(obj, dict):
-            if obj.get("ty") == "gr" and obj.get("nm") == "USERNAME":
+            if (obj.get("ty") == "gr" or obj.get("ty") == 4 or obj.get("ty") == "4") and obj.get("nm") == "USERNAME":
                 b = _verts_to_bounds(_collect_path_verts(obj))
                 if b:
                     return b, obj
@@ -382,31 +382,49 @@ def _find_username_bounds(lottie):
 
 
 def _replace_username(lottie, new_text, font_path):
-    res = _find_username_bounds(lottie)
-    if not res:
-        return False
-    bounds, grp = res
-    x1, y1, x2, y2 = bounds
-    ns = _text_to_lottie_shapes(
-        new_text,
-        font_path,
-        (x1 + x2) / 2,
-        (y1 + y2) / 2,
-        max(abs(y2 - y1), 1.0),
-        max_width=max(abs(x2 - x1), 1.0),
-    )
-    if not ns:
-        return False
-    items = grp.setdefault("it", [])
-    def _hfl(lst):
-        return any(x.get("ty") == "fl" for x in lst)
-    style = [
-        x for x in items
-        if x.get("ty") not in ("sh", "el", "rc", "sr")
-        and not (x.get("ty") == "gr" and not _hfl(x.get("it", [])))
-    ]
-    items[:] = ns + style
-    return True
+    replaced = False
+
+    def walk(obj):
+        nonlocal replaced
+        if isinstance(obj, dict):
+            if (obj.get("ty") == "gr" or obj.get("ty") == 4 or obj.get("ty") == "4") and obj.get("nm") == "USERNAME":
+                b = _verts_to_bounds(_collect_path_verts(obj))
+                if b:
+                    x1, y1, x2, y2 = b
+                    ns = _text_to_lottie_shapes(
+                        new_text,
+                        font_path,
+                        (x1 + x2) / 2,
+                        (y1 + y2) / 2,
+                        max(abs(y2 - y1), 1.0),
+                        max_width=max(abs(x2 - x1), 1.0),
+                    )
+                    if ns:
+                        if "it" in obj:
+                            items = obj.setdefault("it", [])
+                        elif "shapes" in obj:
+                            items = obj.setdefault("shapes", [])
+                        else:
+                            key = "shapes" if (obj.get("ty") == 4 or obj.get("ty") == "4") else "it"
+                            items = obj.setdefault(key, [])
+
+                        def _hfl(lst):
+                            return any(x.get("ty") == "fl" for x in lst)
+                        style = [
+                            x for x in items
+                            if x.get("ty") not in ("sh", "el", "rc", "sr")
+                            and not (x.get("ty") == "gr" and not _hfl(x.get("it", x.get("shapes", []))))
+                        ]
+                        items[:] = ns + style
+                        replaced = True
+            for v in obj.values():
+                walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(lottie)
+    return replaced
 
 
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
