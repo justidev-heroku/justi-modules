@@ -1152,37 +1152,69 @@ def _replace_textgroup(lottie, new_shapes):
 
 def _find_username_bounds(lottie):
     def walk(obj):
-        if isinstance(obj,dict):
-            if obj.get("ty")=="gr" and obj.get("nm")=="USERNAME":
-                b=_verts_to_bounds(_collect_path_verts(obj))
-                if b: return b,obj
+        if isinstance(obj, dict):
+            if (obj.get("ty") == "gr" or obj.get("ty") == 4 or obj.get("ty") == "4") and obj.get("nm") == "USERNAME":
+                b = _verts_to_bounds(_collect_path_verts(obj))
+                if b: return b, obj
             for v in obj.values():
-                r=walk(v)
+                r = walk(v)
                 if r: return r
-        elif isinstance(obj,list):
+        elif isinstance(obj, list):
             for item in obj:
-                r=walk(item)
+                r = walk(item)
                 if r: return r
         return None
     return walk(lottie)
 
 
 def _replace_username(lottie, new_text, font_path):
-    res=_find_username_bounds(lottie)
-    if not res: return False
-    bounds,grp=res; x1,y1,x2,y2=bounds
-    ns=_text_to_lottie_shapes(new_text,font_path,(x1+x2)/2,(y1+y2)/2,
-                               max(abs(y2-y1),1.0),max_width=max(abs(x2-x1),1.0))
-    if not ns: return False
-    items=grp.setdefault("it",[])
-    def _hfl(lst): return any(x.get("ty")=="fl" for x in lst)
-    style=[x for x in items if x.get("ty") not in ("sh","el","rc","sr")
-           and not (x.get("ty")=="gr" and not _hfl(x.get("it",[])))]
-    items[:]=ns+style; return True
+    replaced = False
+
+    def walk(obj):
+        nonlocal replaced
+        if isinstance(obj, dict):
+            if (obj.get("ty") == "gr" or obj.get("ty") == 4 or obj.get("ty") == "4") and obj.get("nm") == "USERNAME":
+                b = _verts_to_bounds(_collect_path_verts(obj))
+                if b:
+                    x1, y1, x2, y2 = b
+                    ns = _text_to_lottie_shapes(
+                        new_text,
+                        font_path,
+                        (x1 + x2) / 2,
+                        (y1 + y2) / 2,
+                        max(abs(y2 - y1), 1.0),
+                        max_width=max(abs(x2 - x1), 1.0),
+                    )
+                    if ns:
+                        if "it" in obj:
+                            items = obj.setdefault("it", [])
+                        elif "shapes" in obj:
+                            items = obj.setdefault("shapes", [])
+                        else:
+                            key = "shapes" if (obj.get("ty") == 4 or obj.get("ty") == "4") else "it"
+                            items = obj.setdefault(key, [])
+
+                        def _hfl(lst):
+                            return any(x.get("ty") == "fl" for x in lst)
+                        style = [
+                            x for x in items
+                            if x.get("ty") not in ("sh", "el", "rc", "sr")
+                            and not (x.get("ty") == "gr" and not _hfl(x.get("it", x.get("shapes", []))))
+                        ]
+                        items[:] = ns + style
+                        replaced = True
+            for v in obj.values():
+                walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(lottie)
+    return replaced
 
 
 OLD_USERNAME = "@emojicreationbot"
-NEW_USERNAME = "@freecreateemoji"
+NEW_USERNAME = "JellyColor"
 
 
 def _dominant_color_from_gradient(colors: list) -> str:
