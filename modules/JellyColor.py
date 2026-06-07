@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.3.4                     ║
+# ║                        🎨 JellyColor v4.3.5                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.3.4: ручная регулировка масштаба + предпросмотр в Избранном  ║
+# ║  v4.3.5: кнопка Назад, кастомный масштаб и отмена генерации       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,7 +31,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 3, 4)
+__version__ = (4, 3, 5)
 
 import asyncio
 import glob
@@ -128,6 +128,7 @@ PE = {
     "trash":   "5870875489362513438",
     "export":  "5963103826075456248",
     "info":    "6028435952299413210",
+    "back":    "5445362436418859744",
 }
 
 # ─── Gradient presets ────────────────────────────────────────────────────────
@@ -1726,37 +1727,94 @@ class JellyColorMod(loader.Module):
             return pe("🏷",PE["sticker"])+f" <b>short_name пака</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите short_name — только a-z, 0-9, _</i>"
         if step=="exists_choice":
             return pe("⚠️",PE["info"])+f" <b>Пак уже существует!</b>\n\nПак <code>{s['pack_name']}</code> уже создан на вашем аккаунте. Выберите действие:"
+        if step=="processing":
+            return pe("⏰",PE["clock"])+" <b>Перекрашиваю...</b>\n\nПожалуйста, подождите. Создаю копию векторных стикеров с новыми цветами."
         return pe("⏰",PE["clock"])+" <b>Перекрашиваю...</b>"
 
     def _j_markup(self,uid):
         s=self._sessions[uid]; step=s["step"]
+        pc = s.get("pack_count", 1)
         if step=="scope": return [[
-            {"text":"Один","icon_custom_emoji_id":PE["sticker"],"callback":self._j_s1,"args":(uid,)},
-            {"text":"Весь пак","icon_custom_emoji_id":PE["pack"],"callback":self._j_sa,"args":(uid,)},
+            {"text":"Один","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"],"style":"primary","callback":self._j_s1,"args":(uid,)},
+            {"text":"Весь пак","icon_custom_emoji_id":PE["pack"],"emoji_id":PE["pack"],"style":"success","callback":self._j_sa,"args":(uid,)},
         ]]
         if step in ("color","gradient_menu"):
             if step=="gradient_menu":
-                return self._gradient_menu_markup(self._j_grad,uid,self._j_back_col)
-            return self._color_rows_with_gradient(uid,self._j_col,self._j_hex,self._j_open_grad,
+                rows = self._gradient_menu_markup(self._j_grad,uid,self._j_back_col)
+                for r in rows:
+                    for btn in r:
+                        btn["emoji_id"] = btn.get("icon_custom_emoji_id")
+                        btn["style"] = "primary"
+                return rows
+            rows = self._color_rows_with_gradient(uid,self._j_col,self._j_hex,self._j_open_grad,
                                                   no_color_cb=self._j_no_color,
                                                   custom_grad_cb=self._j_custom_grad)
-        if step=="title": return [[{"text":"Ввести название","icon_custom_emoji_id":PE["sticker"],
-                                    "input":"Например: My Cool Pack","handler":self._j_title,"args":(uid,)}]]
-        if step=="name": return [[{"text":"Ввести short_name","icon_custom_emoji_id":PE["palette"],
-                                   "input":"a-z, 0-9, _ (без _by_username)","handler":self._j_name,"args":(uid,)}]]
+            for r in rows:
+                for btn in r:
+                    btn["emoji_id"] = btn.get("icon_custom_emoji_id")
+                    if "HEX" in btn["text"] or "Градиент" in btn["text"]:
+                        btn["style"] = "primary"
+                    elif "Без перекраски" in btn["text"]:
+                        btn["style"] = "primary"
+            if pc > 1:
+                rows.append([{"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._j_back,"args":(uid,)}])
+            return rows
+        if step=="title": return [
+            [{"text":"Ввести название","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"],"style":"primary","input":"Например: My Cool Pack","handler":self._j_title,"args":(uid,)}],
+            [{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._j_back,"args":(uid,)}]
+        ]
+        if step=="name": return [
+            [{"text":"Ввести short_name","icon_custom_emoji_id":PE["palette"],"emoji_id":PE["palette"],"style":"primary","input":"a-z, 0-9, _ (без _by_username)","handler":self._j_name,"args":(uid,)}],
+            [{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._j_back,"args":(uid,)}]
+        ]
         if step=="exists_choice":
             return [
                 [
-                    {"text": "Пересоздать (очистить пак)", "icon_custom_emoji_id": PE["trash"], "callback": self._j_handle_exists_choice, "args": (uid, "recreate")},
+                    {"text": "Пересоздать (очистить пак)", "icon_custom_emoji_id": PE["trash"],"emoji_id":PE["trash"],"style":"danger","callback":self._j_handle_exists_choice,"args":(uid,"recreate")},
                 ],
                 [
-                    {"text": "Добавить (сохранить старые)", "icon_custom_emoji_id": PE["pack"], "callback": self._j_handle_exists_choice, "args": (uid, "add")},
+                    {"text": "Добавить (сохранить старые)", "icon_custom_emoji_id": PE["pack"],"emoji_id":PE["pack"],"style":"success","callback":self._j_handle_exists_choice,"args":(uid,"add")},
                 ],
                 [
-                    {"text": "Отмена", "icon_custom_emoji_id": PE["err"], "callback": self._j_handle_exists_choice, "args": (uid, "cancel")},
+                    {"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"],"style":"primary","callback":self._j_back,"args":(uid,)},
                 ]
             ]
+        if step=="processing":
+            return [
+                [{"text": "🛑 Остановить создание", "icon_custom_emoji_id": PE["err"],"emoji_id":PE["err"],"style":"danger","callback":self._j_cancel_generation,"args":(uid,)}]
+            ]
         return []
+
+    async def _j_back(self, call, uid):
+        s = self._sessions.get(uid)
+        if not s: await call.answer("Сессия устарела.", show_alert=True); return
+        step = s["step"]
+        pc = s.get("pack_count", 1)
+        if step == "color":
+            if pc > 1:
+                s["step"] = "scope"
+            else:
+                await call.answer("Назад вернуться нельзя (первый шаг).", show_alert=True)
+                return
+        elif step == "gradient_menu":
+            s["step"] = "color"
+        elif step == "title":
+            s["step"] = "color"
+        elif step == "name":
+            s["step"] = "title"
+        elif step == "exists_choice":
+            s["step"] = "name"
+        await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
+
+    async def _j_cancel_generation(self, call, uid):
+        s = self._sessions.get(uid)
+        if not s: await call.answer("Сессия устарела.", show_alert=True); return
+        task = s.get("run_task")
+        if task and not task.done():
+            task.cancel()
+        s["step"] = "title"
+        await call.answer("🛑 Создание пака остановлено", show_alert=True)
+        await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
 
     async def _j_s1(self,call,uid):
         s=self._sessions.get(uid)
@@ -1826,7 +1884,6 @@ class JellyColorMod(loader.Module):
         s["gradient"]=g; s["color"]="grad:✏️ Свой"; s["step"]="title"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
-
     async def _j_title(self,call,value,uid):
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
@@ -1861,8 +1918,8 @@ class JellyColorMod(loader.Module):
         else:
             s["step"]="processing"
             s["exists_mode"]="recreate"
-            await call.edit(text=self._j_text(uid))
-            asyncio.ensure_future(self._j_run(call,uid))
+            await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
+            s["run_task"] = asyncio.ensure_future(self._j_run(call,uid))
 
     async def _j_handle_exists_choice(self, call, uid, choice):
         s=self._sessions.get(uid)
@@ -1873,78 +1930,83 @@ class JellyColorMod(loader.Module):
             return
         s["exists_mode"] = choice
         s["step"]="processing"
-        await call.edit(text=self._j_text(uid))
-        asyncio.ensure_future(self._j_run(call, uid))
+        await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
+        s["run_task"] = asyncio.ensure_future(self._j_run(call, uid))
 
     async def _j_run(self,call,uid):
-        s=self._sessions[uid]
-        color=s["color"]; pname=s["pack_name"]; ptype=s["type"]
-        gradient=s.get("gradient")  # None если обычный цвет
-        docs=[s["doc"]] if (s["scope"]=="one" or s["pack_count"]==1) else list(s["full_set"].documents)
-        me=await self._client.get_me(); mee=await self._client.get_input_entity("me")
-        async def _fn(i,doc):
-            _is_emoji=(ptype=="emoji")
-            orig_mime=getattr(doc,"mime_type","image/webp")
-            mime="application/x-tgsticker" if orig_mime=="application/x-tgsticker" else "image/webp"
-            if gradient:
-                buf=await recolor_document_gradient(self._client,doc,gradient,is_emoji=_is_emoji)
-            elif color:
-                buf=await recolor_document(self._client,doc,color,is_emoji=_is_emoji)
-            else:
-                # Без перекраски — только ресайз для статичных
-                data=await download_cached(self._client,doc)
-                if orig_mime=="application/x-tgsticker":
-                    buf=io.BytesIO(data); buf.name="sticker.tgs"
-                else:
-                    sz=100 if _is_emoji else 512
-                    img=Image.open(io.BytesIO(data)).convert("RGBA").resize((sz,sz),Image.LANCZOS)
-                    buf=io.BytesIO(); img.save(buf,format="WEBP",lossless=True)
-                    buf.seek(0); buf.name="sticker.webp"
-                buf.seek(0)
-            
-            # Save a copy to /tmp for debugging
-            try:
-                for fpath in glob.glob("/tmp/jelly_debug_last.*"):
-                    os.remove(fpath)
-                ext = "tgs" if buf.name.endswith(".tgs") else "webp"
-                with open(f"/tmp/jelly_debug_last.{ext}", "wb") as f:
-                    f.write(buf.getvalue())
-                buf.seek(0)
-            except Exception:
-                pass
-
-            es="🎨"
-            for a in doc.attributes:
-                if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
-                    es=getattr(a,"alt",None) or "🎨"; break
-            up=await self._client.upload_file(buf,file_name=buf.name)
-            return await _upload_item(self._client,mee,up,mime,es,ptype=="emoji")
-        ordered=await self._parallel(docs,_fn,"Перекраска",call)
+        s=self._sessions.get(uid)
+        if not s: return
         try:
+            color=s["color"]; pname=s["pack_name"]; ptype=s["type"]
+            gradient=s.get("gradient")  # None если обычный цвет
+            docs=[s["doc"]] if (s["scope"]=="one" or s["pack_count"]==1) else list(s["full_set"].documents)
+            me=await self._client.get_me(); mee=await self._client.get_input_entity("me")
+            async def _fn(i,doc):
+                _is_emoji=(ptype=="emoji")
+                orig_mime=getattr(doc,"mime_type","image/webp")
+                mime="application/x-tgsticker" if orig_mime=="application/x-tgsticker" else "image/webp"
+                if gradient:
+                    buf=await recolor_document_gradient(self._client,doc,gradient,is_emoji=_is_emoji)
+                elif color:
+                    buf=await recolor_document(self._client,doc,color,is_emoji=_is_emoji)
+                else:
+                    # Без перекраски — только ресайз для статичных
+                    data=await download_cached(self._client,doc)
+                    if orig_mime=="application/x-tgsticker":
+                        buf=io.BytesIO(data); buf.name="sticker.tgs"
+                    else:
+                        sz=100 if _is_emoji else 512
+                        img=Image.open(io.BytesIO(data)).convert("RGBA").resize((sz,sz),Image.LANCZOS)
+                        buf=io.BytesIO(); img.save(buf,format="WEBP",lossless=True)
+                        buf.seek(0); buf.name="sticker.webp"
+                    buf.seek(0)
+                
+                # Save a copy to /tmp for debugging
+                try:
+                    for fpath in glob.glob("/tmp/jelly_debug_last.*"):
+                        os.remove(fpath)
+                    ext = "tgs" if buf.name.endswith(".tgs") else "webp"
+                    with open(f"/tmp/jelly_debug_last.{ext}", "wb") as f:
+                        f.write(buf.getvalue())
+                    buf.seek(0)
+                except Exception:
+                    pass
+
+                es="🎨"
+                for a in doc.attributes:
+                    if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
+                        es=getattr(a,"alt",None) or "🎨"; break
+                up=await self._client.upload_file(buf,file_name=buf.name)
+                return await _upload_item(self._client,mee,up,mime,es,ptype=="emoji")
+            ordered=await self._parallel(docs,_fn,"Перекраска",call)
             if not ordered: raise ValueError("Нет стикеров")
             clabel=gradient["name"] if gradient else (color or "без перекраски")
             title=s.get("pack_title") or "JellyColor "+clabel
             fn,err=await _safe_create_set(self._client,me.id,title,pname,ordered,ptype=="emoji",exists_mode=s.get("exists_mode","recreate"))
             if err: raise ValueError(err)
             link="https://t.me/"+("addemoji/" if ptype=="emoji" else "addstickers/")+fn
+            
+            stats=self.db.get("JellyColor","stats",[])
+            clabel=gradient["name"] if gradient else (color or "без перекраски")
+            stats.append({"name":fn,"link":link,"color":clabel,"count":len(ordered),"type":ptype,"ts":int(time.time())})
+            self.db.set("JellyColor","stats",stats)
+            tl="Стикерпак" if ptype=="sticker" else "Эмодзи-пак"
+            tag=f"<code>{clabel}</code>"
+            await call.edit(
+                text=(pe("✅",PE["ok"])+" <b>Готово!</b>\n\n"
+                      +pe("🖤",PE["brush"])+f" {tl} → {tag}\n"
+                      +pe("📦",PE["pack"])+f" <b>{len(ordered)}</b> шт.\n\n"
+                      +pe("🔗",PE["link"])+f" <a href=\"{link}\">{link}</a>"),
+                reply_markup=[[{"text":"Открыть","icon_custom_emoji_id":PE["link"],"emoji_id":PE["link"],"style":"success","url":link}]],
+            )
+            self._sessions.pop(uid,None)
+        except asyncio.CancelledError:
+            logger.info(".j final pack generation was cancelled.")
+            raise
         except Exception as e:
             await call.edit(text=pe("❌",PE["err"])+" <code>"+str(e)+"</code>")
             await self._report_error(e, ptype, pname)
-            self._sessions.pop(uid,None); return
-        stats=self.db.get("JellyColor","stats",[])
-        clabel=gradient["name"] if gradient else (color or "без перекраски")
-        stats.append({"name":fn,"link":link,"color":clabel,"count":len(ordered),"type":ptype,"ts":int(time.time())})
-        self.db.set("JellyColor","stats",stats)
-        tl="Стикерпак" if ptype=="sticker" else "Эмодзи-пак"
-        tag=f"<code>{clabel}</code>"
-        await call.edit(
-            text=(pe("✅",PE["ok"])+" <b>Готово!</b>\n\n"
-                  +pe("🖤",PE["brush"])+f" {tl} → {tag}\n"
-                  +pe("📦",PE["pack"])+f" <b>{len(ordered)}</b> шт.\n\n"
-                  +pe("🔗",PE["link"])+f" <a href=\"{link}\">{link}</a>"),
-            reply_markup=[[{"text":"Открыть","icon_custom_emoji_id":PE["link"],"url":link}]],
-        )
-        self._sessions.pop(uid,None)
+            self._sessions.pop(uid,None)
 
     # ─── .jc ────────────────────────────────────────────────────────────
 
@@ -2015,11 +2077,11 @@ class JellyColorMod(loader.Module):
             return (pe("🔎",PE["eye"])+f" <b>Предпросмотр масштаба</b>\n\n"
                     f"Текст: <code>{s['text']}</code>\n"
                     f"Шрифт: <b>{s.get('font_title', 'Comfortaa')}</b>\n"
-                    f"Текущий масштаб: <b>{s.get('scale_factor', 0.8):.1f}x</b>\n\n"
+                    f"Текущий масштаб: <b>{s.get('scale_factor', 0.8):.2f}x</b> ({int(round(s.get('scale_factor', 0.8) * 100))}%)\n\n"
                     f"Первые 5 эмодзи отправлены в ваше <b>Избранное</b> (Saved Messages) для предпросмотра.\n"
                     f"Вы можете настроить масштаб кнопками ниже.")
         if step=="preview_gen":
-            return pe("⏰",PE["clock"])+f" <b>Генерирую предпросмотр...</b>\n\nСоздаю первые 5 эмодзи с масштабом <b>{s.get('scale_factor', 0.8):.1f}x</b> и отправляю в Избранное."
+            return pe("⏰",PE["clock"])+f" <b>Генерирую предпросмотр...</b>\n\nСоздаю первые 5 эмодзи с масштабом <b>{s.get('scale_factor', 0.8):.2f}x</b> и отправляю в Избранное."
         if step=="color":
             hist=self._color_history()
             hs=("\n"+pe("⏰",PE["clock"])+" Последние: "+"  ".join(f"<code>{c}</code>" for c in hist)) if hist else ""
@@ -2028,62 +2090,157 @@ class JellyColorMod(loader.Module):
         if step=="name": return pe("🏷",PE["sticker"])+f" <b>short_name пака</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите short_name — только a-z, 0-9, _</i>"
         if step=="exists_choice":
             return pe("⚠️",PE["info"])+f" <b>Пак уже существует!</b>\n\nПак <code>{s['pack_name']}</code> уже создан на вашем аккаунте. Выберите действие:"
+        if step=="processing":
+            return pe("⏰",PE["clock"])+f" <b>Создаю пак...</b>\n\nПожалуйста, подождите. Идет генерация эмодзи/стикеров."
         return pe("⏰",PE["clock"])+" <b>Создаём...</b>"
 
     def _jt_markup(self,uid):
         s=self._tsessions[uid]; step=s["step"]
-        if step=="template": return [[{"text":t["title"],"icon_custom_emoji_id":PE["sticker"],
-            "callback":self._jt_tmpl,"args":(uid,i)}] for i,t in enumerate(TEMPLATE_SETS)]
-        if step=="text": return [[{"text":"Ввести текст","icon_custom_emoji_id":PE["palette"],
-            "input":"Текст (вместо "+TEMPLATE_PLACEHOLDER+")","handler":self._jt_text_in,"args":(uid,)}]]
+        if step=="template": return [[{"text":t["title"],"icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"],
+            "style":"primary","callback":self._jt_tmpl,"args":(uid,i)}] for i,t in enumerate(TEMPLATE_SETS)]
+        if step=="text": return [
+            [{"text":"Ввести текст","icon_custom_emoji_id":PE["palette"],"emoji_id":PE["palette"],"style":"primary",
+              "input":"Текст (вместо "+TEMPLATE_PLACEHOLDER+")","handler":self._jt_text_in,"args":(uid,)}],
+            [{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._jt_back,"args":(uid,)}]
+        ]
         if step=="font":
             user_fonts = self.db.get("JellyColor", "user_fonts", [])
-            buttons = [[{"text": "Comfortaa (По умолчанию)", "icon_custom_emoji_id": PE["sticker"], "callback": self._jt_font_sel, "args": (uid, "default")}]]
+            buttons = [[{"text": "Comfortaa (По умолчанию)", "icon_custom_emoji_id": PE["sticker"],"emoji_id":PE["sticker"], "style": "primary", "callback": self._jt_font_sel, "args": (uid, "default")}]]
             for f in user_fonts:
-                buttons.append([{"text": f["title"], "icon_custom_emoji_id": PE["sticker"], "callback": self._jt_font_sel, "args": (uid, f["title"])}])
+                buttons.append([{"text": f["title"], "icon_custom_emoji_id": PE["sticker"],"emoji_id":PE["sticker"], "style": "primary", "callback": self._jt_font_sel, "args": (uid, f["title"])}])
+            buttons.append([{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"], "style": "danger", "callback":self._jt_back,"args":(uid,)}])
             return buttons
         if step=="preview":
             me_id = s.get("me_id") or uid
             saved_messages_link = f"tg://openmessage?user_id={me_id}"
             return [
                 [
-                    {"text": "🔎 Мельче (-10%)", "callback": self._jt_scale_change, "args": (uid, -0.1)},
-                    {"text": "🔍 Крупнее (+10%)", "callback": self._jt_scale_change, "args": (uid, 0.1)},
+                    {"text": "🔎 Мельче (-10%)", "callback": self._jt_scale_change, "args": (uid, -0.1), "style": "primary"},
+                    {"text": "🔍 Крупнее (+10%)", "callback": self._jt_scale_change, "args": (uid, 0.1), "style": "primary"},
                 ],
                 [
-                    {"text": "✅ Применить", "icon_custom_emoji_id": PE["ok"], "callback": self._jt_confirm, "args": (uid,)},
-                    {"text": "✏️ Изменить текст", "icon_custom_emoji_id": PE["brush"], "callback": self._jt_retry, "args": (uid,)},
+                    {"text": "📝 Свой масштаб (%)", "input": "Введите масштаб в % (например, 80 или 120)", "handler": self._jt_custom_scale_in, "args": (uid,), "style": "primary"},
                 ],
                 [
-                    {"text": "💬 Перейти в Избранное", "icon_custom_emoji_id": PE["link"], "url": saved_messages_link}
+                    {"text": "✅ Применить", "icon_custom_emoji_id": PE["ok"],"emoji_id":PE["ok"], "style": "success", "callback": self._jt_confirm, "args": (uid,)},
+                    {"text": "✏️ Изменить текст", "icon_custom_emoji_id": PE["brush"],"emoji_id":PE["brush"], "style": "primary", "callback": self._jt_retry, "args": (uid,)},
+                ],
+                [
+                    {"text": "💬 Перейти в Избранное", "icon_custom_emoji_id": PE["link"],"emoji_id":PE["link"], "style": "success", "url": saved_messages_link}
+                ],
+                [
+                    {"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"], "style": "danger", "callback":self._jt_back,"args":(uid,)}
                 ]
             ]
         if step=="preview_gen":
-            return []
+            return [
+                [{"text": "🛑 Остановить генерацию", "icon_custom_emoji_id": PE["err"],"emoji_id":PE["err"], "style": "danger", "callback": self._jt_cancel_generation, "args": (uid, "preview")}]
+            ]
         if step=="color":
             rows=self._color_rows_with_gradient(uid,self._jt_col,self._jt_hex,self._jt_open_grad,
                                                  no_color_cb=self._jt_no_color,
                                                  custom_grad_cb=self._jt_custom_grad)
+            for r in rows:
+                for btn in r:
+                    btn["emoji_id"] = btn.get("icon_custom_emoji_id")
+                    if "HEX" in btn["text"] or "Градиент" in btn["text"]:
+                        btn["style"] = "primary"
+                    elif "Без перекраски" in btn["text"]:
+                        btn["style"] = "primary"
+            rows.append([{"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"], "style": "danger", "callback": self._jt_back, "args": (uid,)}])
             return rows
         if step=="gradient_menu":
-            return self._gradient_menu_markup(self._jt_grad,uid,self._jt_back_col)
-        if step=="title": return [[{"text":"Ввести название","icon_custom_emoji_id":PE["sticker"],
-            "input":"Например: My Cool Pack","handler":self._jt_title,"args":(uid,)}]]
-        if step=="name": return [[{"text":"Ввести short_name","icon_custom_emoji_id":PE["palette"],
-            "input":"a-z, 0-9, _ (без _by_username)","handler":self._jt_name,"args":(uid,)}]]
+            rows = self._gradient_menu_markup(self._jt_grad,uid,self._jt_back_col)
+            for r in rows:
+                for btn in r:
+                    btn["emoji_id"] = btn.get("icon_custom_emoji_id")
+                    btn["style"] = "primary"
+            return rows
+        if step=="title": return [
+            [{"text":"Ввести название","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"], "style": "primary", "input":"Например: My Cool Pack","handler":self._jt_title,"args":(uid,)}],
+            [{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"], "style": "danger", "callback":self._jt_back,"args":(uid,)}]
+        ]
+        if step=="name": return [
+            [{"text":"Ввести short_name","icon_custom_emoji_id":PE["palette"],"emoji_id":PE["palette"], "style": "primary", "input":"a-z, 0-9, _ (без _by_username)","handler":self._jt_name,"args":(uid,)}],
+            [{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"], "style": "danger", "callback":self._jt_back,"args":(uid,)}]
+        ]
         if step=="exists_choice":
             return [
                 [
-                    {"text": "Пересоздать (очистить пак)", "icon_custom_emoji_id": PE["trash"], "callback": self._jt_handle_exists_choice, "args": (uid, "recreate")},
+                    {"text": "Пересоздать (очистить пак)", "icon_custom_emoji_id": PE["trash"],"emoji_id":PE["trash"], "style": "danger", "callback": self._jt_handle_exists_choice, "args": (uid, "recreate")},
                 ],
                 [
-                    {"text": "Добавить (сохранить старые)", "icon_custom_emoji_id": PE["pack"], "callback": self._jt_handle_exists_choice, "args": (uid, "add")},
+                    {"text": "Добавить (сохранить старые)", "icon_custom_emoji_id": PE["pack"],"emoji_id":PE["pack"], "style": "success", "callback": self._jt_handle_exists_choice, "args": (uid, "add")},
                 ],
                 [
-                    {"text": "Отмена", "icon_custom_emoji_id": PE["err"], "callback": self._jt_handle_exists_choice, "args": (uid, "cancel")},
+                    {"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"], "style": "primary", "callback": self._jt_back, "args": (uid,)},
                 ]
             ]
+        if step=="processing":
+            return [
+                [{"text": "🛑 Остановить создание", "icon_custom_emoji_id": PE["err"],"emoji_id":PE["err"], "style": "danger", "callback": self._jt_cancel_generation, "args": (uid, "run")}]
+            ]
         return []
+
+    async def _jt_back(self, call, uid):
+        s = self._tsessions.get(uid)
+        if not s: await call.answer("Сессия устарела.", show_alert=True); return
+        step = s["step"]
+        if step == "text":
+            s["step"] = "template"
+        elif step == "font":
+            s["step"] = "text"
+        elif step == "preview":
+            s["step"] = "font"
+        elif step == "color":
+            s["step"] = "preview"
+        elif step == "gradient_menu":
+            s["step"] = "color"
+        elif step == "title":
+            s["step"] = "color"
+        elif step == "name":
+            s["step"] = "title"
+        elif step == "exists_choice":
+            s["step"] = "name"
+        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+
+    async def _jt_cancel_generation(self, call, uid, task_type):
+        s = self._tsessions.get(uid)
+        if not s: await call.answer("Сессия устарела.", show_alert=True); return
+        if task_type == "preview":
+            task = s.get("preview_task")
+            if task and not task.done():
+                task.cancel()
+            s["preview_running"] = False
+            s["step"] = "font"
+            await call.answer("🛑 Генерация предпросмотра остановлена", show_alert=True)
+        elif task_type == "run":
+            task = s.get("run_task")
+            if task and not task.done():
+                task.cancel()
+            s["step"] = "title"
+            await call.answer("🛑 Генерация пака остановлена", show_alert=True)
+        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+
+    async def _jt_custom_scale_in(self, call, value, uid):
+        s = self._tsessions.get(uid)
+        if not s: await call.answer("Сессия устарела.", show_alert=True); return
+        if s.get("preview_running"):
+            await call.answer("⏳ Генерируется предыдущий предпросмотр, подождите...", show_alert=True)
+            return
+        val_str = value.strip().replace("%", "")
+        try:
+            val_pct = float(val_str)
+            if val_pct < 10 or val_pct > 300:
+                await call.answer("Масштаб должен быть от 10% до 300%", show_alert=True)
+                return
+            s["scale_factor"] = round(val_pct / 100.0, 2)
+        except ValueError:
+            await call.answer("Введите корректное число (например, 80 или 120)", show_alert=True)
+            return
+        s["step"] = "preview_gen"
+        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+        s["preview_task"] = asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
 
     async def _jt_tmpl(self,call,uid,idx):
         s=self._tsessions.get(uid)
@@ -2120,7 +2277,7 @@ class JellyColorMod(loader.Module):
                 s["font_title"] = "Comfortaa"
         s["step"] = "preview_gen"
         await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-        asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
+        s["preview_task"] = asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
 
     async def _jt_scale_change(self, call, uid, delta):
         s = self._tsessions.get(uid)
@@ -2131,7 +2288,7 @@ class JellyColorMod(loader.Module):
         s["scale_factor"] = round(max(0.1, min(3.0, s.get("scale_factor", 0.8) + delta)), 1)
         s["step"] = "preview_gen"
         await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-        asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
+        s["preview_task"] = asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
 
     async def _jt_generate_and_send_preview(self, uid, call):
         s = self._tsessions.get(uid)
@@ -2163,7 +2320,7 @@ class JellyColorMod(loader.Module):
                     f"<b>🎨 JellyColor: Предпросмотр</b>\n"
                     f"Шаблон: <code>{tmpl['title']}</code>\n"
                     f"Текст: <code>{txt}</code>\n"
-                    f"Масштаб: <code>{s['scale_factor']:.1f}x</code>"
+                    f"Масштаб: <code>{s['scale_factor']:.2f}x</code>"
                 )
             except Exception:
                 pass
@@ -2195,15 +2352,27 @@ class JellyColorMod(loader.Module):
                     await self._client.send_file("me", up, force_document=False)
                 except Exception as e:
                     logger.exception("Failed to send preview item")
+        except asyncio.CancelledError:
+            logger.info("Preview generation task was cancelled.")
+            raise
         finally:
             s["preview_running"] = False
-            if uid in self._tsessions and self._tsessions[uid] is s:
-                s["step"] = "preview"
-                await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-                try:
-                    await call.answer("💬 Первые 5 эмодзи отправлены в Избранное (Saved Messages) для предпросмотра!", show_alert=True)
-                except Exception:
-                    pass
+            is_cancelled = False
+            try:
+                t = asyncio.current_task()
+                if t and t.cancelled():
+                    is_cancelled = True
+            except Exception:
+                pass
+            
+            if not is_cancelled:
+                if uid in self._tsessions and self._tsessions[uid] is s:
+                    s["step"] = "preview"
+                    await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+                    try:
+                        await call.answer("💬 Первые 5 эмодзи отправлены в Избранное (Saved Messages) для предпросмотра!", show_alert=True)
+                    except Exception:
+                        pass
 
     async def _jt_confirm(self,call,uid):
         s=self._tsessions.get(uid)
@@ -2313,8 +2482,8 @@ class JellyColorMod(loader.Module):
         else:
             s["step"]="processing"
             s["exists_mode"]="recreate"
-            await call.edit(text=self._jt_text(uid))
-            asyncio.ensure_future(self._jt_run(call,uid))
+            await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+            s["run_task"] = asyncio.ensure_future(self._jt_run(call,uid))
 
     async def _jt_handle_exists_choice(self, call, uid, choice):
         s=self._tsessions.get(uid)
@@ -2325,90 +2494,95 @@ class JellyColorMod(loader.Module):
             return
         s["exists_mode"] = choice
         s["step"]="processing"
-        await call.edit(text=self._jt_text(uid))
-        asyncio.ensure_future(self._jt_run(call, uid))
+        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+        s["run_task"] = asyncio.ensure_future(self._jt_run(call, uid))
 
     async def _jt_run(self,call,uid):
-        s=self._tsessions[uid]
-        tmpl,txt,pname,color=s["template"],s["text"],s["pack_name"],s.get("color")
-        gradient=s.get("gradient")
+        s=self._tsessions.get(uid)
+        if not s: return
         try:
-            fs=await self._client(functions.messages.GetStickerSetRequest(
-                stickerset=types.InputStickerSetShortName(short_name=tmpl["short_name"]),hash=0))
-        except Exception as e:
-            await call.edit(text=pe("❌",PE["err"])+" Шаблон: <code>"+str(e)+"</code>")
-            self._tsessions.pop(uid,None); return
-        docs=list(fs.documents)
-        me=await self._client.get_me(); mee=await self._client.get_input_entity("me")
-        async def _fn(i,doc):
-            raw=await download_cached(self._client,doc)
-            mime=getattr(doc,"mime_type","")
-            loop = asyncio.get_event_loop()
-            if mime=="application/x-tgsticker":
-                def _process_tgs():
-                    lottie_obj = json_loads(gzip.decompress(raw))
-                    modify_lottie(lottie_obj, txt, s.get("font_path"), scale_factor=s.get("scale_factor", 1.0))
-                    if gradient:
-                        apply_gradient_lottie(lottie_obj, gradient)
-                        outline_color = _dominant_color_from_gradient(gradient["colors"])
-                    elif color:
-                        tint_lottie(lottie_obj, color)
-                        outline_color = color
-                    else:
-                        outline_color = None
-                        
-                    if outline_color:
-                        _set_text_neon_style(lottie_obj, outline_color)
-                    return compress_tgs(lottie_obj)
-                patched = await loop.run_in_executor(None, _process_tgs)
-                buf=io.BytesIO(patched); buf.name="sticker.tgs"
-            else:
-                def _process_img():
-                    img=Image.open(io.BytesIO(raw)).convert("RGBA").resize((100,100),Image.LANCZOS)
-                    if gradient:
-                        img=tint_image_gradient(img, gradient["colors"], gradient.get("dir", "d"))
-                    elif color and not color.startswith("grad:"):
-                        img=tint_image(img,color)
-                    buf=io.BytesIO()
-                    img.save(buf,format="WEBP",lossless=True)
-                    buf.seek(0)
-                    return buf.getvalue()
-                img_data = await loop.run_in_executor(None, _process_img)
-                buf=io.BytesIO(img_data); buf.name="sticker.webp"
-                mime="image/webp"
+            tmpl,txt,pname,color=s["template"],s["text"],s["pack_name"],s.get("color")
+            gradient=s.get("gradient")
+            try:
+                fs=await self._client(functions.messages.GetStickerSetRequest(
+                    stickerset=types.InputStickerSetShortName(short_name=tmpl["short_name"]),hash=0))
+            except Exception as e:
+                await call.edit(text=pe("❌",PE["err"])+" Шаблон: <code>"+str(e)+"</code>")
+                self._tsessions.pop(uid,None); return
+            docs=list(fs.documents)
+            me=await self._client.get_me(); mee=await self._client.get_input_entity("me")
+            async def _fn(i,doc):
+                raw=await download_cached(self._client,doc)
+                mime=getattr(doc,"mime_type","")
+                loop = asyncio.get_event_loop()
+                if mime=="application/x-tgsticker":
+                    def _process_tgs():
+                        lottie_obj = json_loads(gzip.decompress(raw))
+                        modify_lottie(lottie_obj, txt, s.get("font_path"), scale_factor=s.get("scale_factor", 1.0))
+                        if gradient:
+                            apply_gradient_lottie(lottie_obj, gradient)
+                            outline_color = _dominant_color_from_gradient(gradient["colors"])
+                        elif color:
+                            tint_lottie(lottie_obj, color)
+                            outline_color = color
+                        else:
+                            outline_color = None
+                            
+                        if outline_color:
+                            _set_text_neon_style(lottie_obj, outline_color)
+                        return compress_tgs(lottie_obj)
+                    patched = await loop.run_in_executor(None, _process_tgs)
+                    buf=io.BytesIO(patched); buf.name="sticker.tgs"
+                else:
+                    def _process_img():
+                        img=Image.open(io.BytesIO(raw)).convert("RGBA").resize((100,100),Image.LANCZOS)
+                        if gradient:
+                            img=tint_image_gradient(img, gradient["colors"], gradient.get("dir", "d"))
+                        elif color and not color.startswith("grad:"):
+                            img=tint_image(img,color)
+                        buf=io.BytesIO()
+                        img.save(buf,format="WEBP",lossless=True)
+                        buf.seek(0)
+                        return buf.getvalue()
+                    img_data = await loop.run_in_executor(None, _process_img)
+                    buf=io.BytesIO(img_data); buf.name="sticker.webp"
+                    mime="image/webp"
 
-            es="✨"
-            for a in doc.attributes:
-                if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
-                    es=getattr(a,"alt",None) or "✨"; break
-            up=await self._client.upload_file(buf,file_name=buf.name)
-            return await _upload_item(self._client,mee,up,mime,es,True)
-        ordered=await self._parallel(docs,_fn,"Создаём",call)
-        if not ordered:
-            await call.edit(text=pe("❌",PE["err"])+" Ни один эмодзи не обработан.")
-            self._tsessions.pop(uid,None); return
-        color_label=gradient["name"] if gradient else (color or "без перекраски")
-        try:
+                es="✨"
+                for a in doc.attributes:
+                    if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
+                        es=getattr(a,"alt",None) or "✨"; break
+                up=await self._client.upload_file(buf,file_name=buf.name)
+                return await _upload_item(self._client,mee,up,mime,es,True)
+            ordered=await self._parallel(docs,_fn,"Создаём",call)
+            if not ordered:
+                await call.edit(text=pe("❌",PE["err"])+" Ни один эмодзи не обработан.")
+                self._tsessions.pop(uid,None); return
+            color_label=gradient["name"] if gradient else (color or "без перекраски")
             pack_title=s.get("pack_title") or txt+" Emoji Pack"
             fn,err=await _safe_create_set(self._client,me.id,pack_title,pname,ordered,True,exists_mode=s.get("exists_mode","recreate"))
             if err: raise ValueError(err)
             link="https://t.me/addemoji/"+fn
+            
+            stats=self.db.get("JellyColor","stats",[])
+            stats.append({"name":fn,"link":link,"color":color or "text","count":len(ordered),"type":"emoji","ts":int(time.time())})
+            self.db.set("JellyColor","stats",stats)
+            await call.edit(
+                text=(pe("✅",PE["ok"])+" <b>Готово!</b>\n\n"
+                      +pe("✍️",PE["write"])+f" Текст: <code>{txt}</code>\n"
+                      +pe("🎨",PE["palette"])+f" Цвет: <code>{color_label}</code>\n"
+                      +pe("📦",PE["pack"])+f" <b>{len(ordered)}</b> шт.\n\n"
+                      +pe("🔗",PE["link"])+f" <a href=\"{link}\">{link}</a>"),
+                reply_markup=[[{"text":"Открыть","icon_custom_emoji_id":PE["link"],"emoji_id":PE["link"],"style":"success","url":link}]],
+            )
+            self._tsessions.pop(uid,None)
+        except asyncio.CancelledError:
+            logger.info(".jt final pack generation was cancelled.")
+            raise
         except Exception as e:
             await call.edit(text=pe("❌",PE["err"])+" <code>"+str(e)+"</code>")
             await self._report_error(e, "emoji", pname)
-            self._tsessions.pop(uid,None); return
-        stats=self.db.get("JellyColor","stats",[])
-        stats.append({"name":fn,"link":link,"color":color or "text","count":len(ordered),"type":"emoji","ts":int(time.time())})
-        self.db.set("JellyColor","stats",stats)
-        await call.edit(
-            text=(pe("✅",PE["ok"])+" <b>Готово!</b>\n\n"
-                  +pe("✍️",PE["write"])+f" Текст: <code>{txt}</code>\n"
-                  +pe("🎨",PE["palette"])+f" Цвет: <code>{color_label}</code>\n"
-                  +pe("📦",PE["pack"])+f" <b>{len(ordered)}</b> шт.\n\n"
-                  +pe("🔗",PE["link"])+f" <a href=\"{link}\">{link}</a>"),
-            reply_markup=[[{"text":"Открыть","icon_custom_emoji_id":PE["link"],"url":link}]],
-        )
-        self._tsessions.pop(uid,None)
+            self._tsessions.pop(uid,None)
 
     # ─── Fonts commands ───────────────────────────────────────────────────────
 
