@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.2.4                     ║
+# ║                        🎨 JellyColor v4.2.5                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.2.4: выбор при существовании пака, масштабируемый текст      ║
+# ║  v4.2.5: выбор при существовании пака, масштабируемый текст      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,7 +31,7 @@
 #
 # modification: JellyColor pack exists handling, scalable text, and version bump
 
-__version__ = (4, 2, 4)
+__version__ = (4, 2, 5)
 
 import asyncio
 import glob
@@ -152,6 +152,7 @@ TEMPLATE_SETS = [
     {"title": "🎨 Цветные", "short_name": "mainemoji_jellycolor4_by_justidev"},
     {"title": "🗂 Паспорт", "short_name": "mainemoji_jellycolor9_by_justidev"},
     {"title": "✨ Эксклюзивные", "short_name": "mainemoji_jellycolor10_by_justidev"},
+    {"title": "📦 All in All", "short_name": "mainemoji_jellycolor14_by_justidev"},
 ]
 
 TEMPLATE_PLACEHOLDER = "jelly"
