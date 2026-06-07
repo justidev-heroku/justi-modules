@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.2.8                     ║
+# ║                        🎨 JellyColor v4.2.9                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.2.8: оптимизация соотношения сторон и размера шрифта         ║
+# ║  v4.2.9: адаптивное двухстороннее масштабирование текста         ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,9 +29,9 @@
 # meta developer: @justidev
 # requires: Pillow fonttools orjson
 #
-# modification: JellyColor aspect ratio and font size scaling optimizations
+# modification: JellyColor bidirectional text scaling optimizations
 
-__version__ = (4, 2, 8)
+__version__ = (4, 2, 9)
 
 import asyncio
 import glob
@@ -1181,7 +1181,7 @@ def _replace_username(lottie, new_text, font_path):
                     cx = (x1 + x2) / 2
                     cy = (y1 + y2) / 2
                     L = len(new_text)
-                    h_scale = (13.0 / max(L, 13)) ** 0.5
+                    h_scale = min(1.5, (13.0 / max(L, 1)) ** 0.4)
                     h = max(abs(y2 - y1), 1.0) * h_scale
                     w = max(abs(x2 - x1), 1.0)
                     cx_clamped = max(30.0, min(482.0, cx))
@@ -1342,7 +1342,7 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if bounds:
         x1,y1,x2,y2=bounds; cx=(x1+x2)/2; cy=(y1+y2)/2
         L = len(new_text)
-        h_scale = (5.0 / max(L, 5)) ** 0.5
+        h_scale = min(1.5, (5.0 / max(L, 1)) ** 0.4)
         h = max(abs(y2-y1), 5.) * h_scale
         w = max(abs(x2-x1), 5.)
         cx_clamped = max(30.0, min(482.0, cx))
