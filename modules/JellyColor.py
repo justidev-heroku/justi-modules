@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v3.9.1                     ║
+# ║                        🎨 JellyColor v3.9.2                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v3.9.1: неоновая обводка, без превью, переименована jstats       ║
+# ║  v3.9.2: неоновая обводка для Shape Layer и Group                 ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 9, 1)
+__version__ = (3, 9, 2)
 
 import asyncio
 import glob
@@ -1125,8 +1125,7 @@ def _dominant_color_from_gradient(colors: list) -> str:
     return rgb_to_hex(sum(rs)//len(rs), sum(gs)//len(gs), sum(bs)//len(bs))
 
 
-def _apply_neon_style_to_group(group: dict, stroke_hex: str) -> None:
-    items = group.get("it", [])
+def _apply_neon_style_to_items(items: list, stroke_hex: str) -> list:
     sr, sg, sb = hex_to_rgb(stroke_hex)
     snr, sng, snb = sr / 255, sg / 255, sb / 255
     
@@ -1187,7 +1186,7 @@ def _apply_neon_style_to_group(group: dict, stroke_hex: str) -> None:
     non_shapes = [x for x in other_items if x not in shapes]
     
     # Render stroke behind fill for clean neon look
-    group["it"] = shapes + [stroke_obj, fill_obj] + non_shapes
+    return shapes + [stroke_obj, fill_obj] + non_shapes
 
 
 def _set_text_neon_style(lottie: dict, stroke_hex: str) -> None:
@@ -1199,10 +1198,20 @@ def _set_text_neon_style(lottie: dict, stroke_hex: str) -> None:
         nm = (obj.get("nm") or "").lower()
         return "textgroup" in nm or nm == "text"
 
+    def _is_text_layer(obj):
+        if not isinstance(obj, dict):
+            return False
+        if obj.get("ty") != 4:
+            return False
+        nm = (obj.get("nm") or "").lower()
+        return "text" in nm and "user" not in nm
+
     def _walk(obj):
         if isinstance(obj, dict):
             if _is_text_group(obj):
-                _apply_neon_style_to_group(obj, stroke_hex)
+                obj["it"] = _apply_neon_style_to_items(obj.get("it", []), stroke_hex)
+            elif _is_text_layer(obj):
+                obj["shapes"] = _apply_neon_style_to_items(obj.get("shapes", []), stroke_hex)
             for v in obj.values():
                 _walk(v)
         elif isinstance(obj, list):
