@@ -20,6 +20,12 @@
 Разрабатываю модули для **[Heroku](https://github.com/coddrago/Heroku)** — универсального юзербота для Telegram.  
 
 
+## Модули
+
+- 🎨 **JellyColor** — Перекраска стикеров/эмодзи и шаблоны ([RU](Readme/JellyColor_ru.md) | [EN](Readme/JellyColor_en.md))
+- 🔮 **JellyParser** — Парсинг текстовых групп из эмодзи-паков ([RU](Readme/JellyParser_ru.md) | [EN](Readme/JellyParser_en.md))
+
+
 ## Документация
 
 - 📖 [Heroku Docs](https://dev.heroku-ub.xyz/) — документация по юзерботу
