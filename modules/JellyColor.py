@@ -1579,7 +1579,7 @@ class JellyColorMod(loader.Module):
                     if td: break
         return td,tt,ts
 
-    async def _parallel(self, docs, fn, label, call):
+    async def _parallel(self, docs, fn, label, call, reply_markup=None):
         """Запускает fn(i,doc)->item|None параллельно с прогрессом.
 
         Fixes:
@@ -1600,11 +1600,14 @@ class JellyColorMod(loader.Module):
             bar_len=20; filled=int(p/n*bar_len)
             bar="█"*filled+"░"*(bar_len-filled)
             try:
-                await call.edit(text=(
-                    pe("⏰",PE["clock"])+f" <b>{label}...</b>\n\n"
-                    f"<code>[{bar}]</code> {int(p/n*100)}%\n"
-                    f"<b>{p}/{n}</b>"
-                ))
+                await call.edit(
+                    text=(
+                        pe("⏰",PE["clock"])+f" <b>{label}...</b>\n\n"
+                        f"<code>[{bar}]</code> {int(p/n*100)}%\n"
+                        f"<b>{p}/{n}</b>"
+                    ),
+                    reply_markup=reply_markup
+                )
             except Exception:
                 pass
 
@@ -1978,7 +1981,7 @@ class JellyColorMod(loader.Module):
                         es=getattr(a,"alt",None) or "🎨"; break
                 up=await self._client.upload_file(buf,file_name=buf.name)
                 return await _upload_item(self._client,mee,up,mime,es,ptype=="emoji")
-            ordered=await self._parallel(docs,_fn,"Перекраска",call)
+            ordered=await self._parallel(docs,_fn,"Перекраска",call,reply_markup=self._j_markup(uid))
             if not ordered: raise ValueError("Нет стикеров")
             clabel=gradient["name"] if gradient else (color or "без перекраски")
             title=s.get("pack_title") or "JellyColor "+clabel
@@ -2554,9 +2557,9 @@ class JellyColorMod(loader.Module):
                         es=getattr(a,"alt",None) or "✨"; break
                 up=await self._client.upload_file(buf,file_name=buf.name)
                 return await _upload_item(self._client,mee,up,mime,es,True)
-            ordered=await self._parallel(docs,_fn,"Создаём",call)
+            ordered=await self._parallel(docs,_fn,"Создаём",call,reply_markup=self._jt_markup(uid))
             if not ordered:
-                await call.edit(text=pe("❌",PE["err"])+" Ни один эмодзи не обработан.")
+                await call.edit(text=pe("❌",PE["err"])+" Ни один эмодзи не обработан.", reply_markup=self._jt_markup(uid))
                 self._tsessions.pop(uid,None); return
             color_label=gradient["name"] if gradient else (color or "без перекраски")
             pack_title=s.get("pack_title") or txt+" Emoji Pack"
