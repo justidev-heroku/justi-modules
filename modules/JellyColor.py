@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v3.9.2                     ║
+# ║                        🎨 JellyColor v3.9.3                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v3.9.2: неоновая обводка для Shape Layer и Group                 ║
+# ║  v3.9.3: замена юзернейма на @JellyColor                          ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,7 +29,7 @@
 # meta developer: @justidev
 # requires: Pillow fonttools
 
-__version__ = (3, 9, 2)
+__version__ = (3, 9, 3)
 
 import asyncio
 import glob
@@ -1112,7 +1112,7 @@ def _replace_username(lottie, new_text, font_path):
 
 
 OLD_USERNAME = "@emojicreationbot"
-NEW_USERNAME = "@freecreateemoji"
+NEW_USERNAME = "@JellyColor"
 
 
 def _dominant_color_from_gradient(colors: list) -> str:
