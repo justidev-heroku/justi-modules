@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.3.1                     ║
+# ║                        🎨 JellyColor v4.3.2                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.3.1: исправление повторного создания существующих паков     ║
+# ║  v4.3.2: исправление сжатия TGS и ограничения размера паков      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -29,9 +29,9 @@
 # meta developer: @justidev
 # requires: Pillow fonttools orjson
 #
-# modification: JellyColor existing pack update fix
+# modification: JellyColor TGS compression and size optimization fix
 
-__version__ = (4, 3, 1)
+__version__ = (4, 3, 2)
 
 import asyncio
 import glob
@@ -780,9 +780,6 @@ async def download_cached(client, doc) -> bytes:
 
 def compress_tgs(lottie: dict) -> bytes:
     raw = json_dumps(lottie)
-    if len(raw) < 150 * 1024:
-        return gzip.compress(raw, compresslevel=6)
-
     compressed = gzip.compress(raw, compresslevel=6)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
@@ -815,9 +812,25 @@ def compress_tgs(lottie: dict) -> bytes:
     _round_floats(lottie, 2)
     raw = json_dumps(lottie)
     compressed = gzip.compress(raw, compresslevel=6)
-    if len(compressed) > MAX_TGS_SIZE:
-        compressed = gzip.compress(raw, compresslevel=9)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
 
+    # Try higher compression level
+    compressed = gzip.compress(raw, compresslevel=9)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
+
+    # Try precision=1
+    _round_floats(lottie, 1)
+    raw = json_dumps(lottie)
+    compressed = gzip.compress(raw, compresslevel=9)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
+
+    # Try precision=0
+    _round_floats(lottie, 0)
+    raw = json_dumps(lottie)
+    compressed = gzip.compress(raw, compresslevel=9)
     return compressed
 
 
