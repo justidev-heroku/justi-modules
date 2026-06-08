@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.3.9                     ║
+# ║                        🎨 JellyColor v4.4.0                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.3.9: кнопка Назад, кастомный масштаб и отмена генерации       ║
+# ║  v4.4.0: кнопка Назад, кастомный масштаб и отмена генерации       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,7 +31,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 3, 9)
+__version__ = (4, 4, 0)
 
 import asyncio
 import glob
@@ -1494,9 +1494,9 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
 
 @loader.tds
 class JellyColorMod(loader.Module):
-    """Перекраска + текстовые шаблоны с поддержкой пользовательских шрифтов.
-    Ускорена генерация паков эмодзи и добавлено управление шрифтами (.jaddfont, .jdelfont, .jfonts).
-    Команды: .j .jc .jt .jstats .jdel .jexport .jdump .jaddfont .jdelfont .jfonts"""
+    """🎨 JellyColor: Перекраска стикеров и создание текстовых эмодзи-паков.
+    Поддерживает градиенты, пользовательские шрифты, изменение масштаба и отмену генерации.
+    Команды: .j, .jc, .jt, .jstats, .jdel, .jexport, .jdump, .jaddfont, .jdelfont, .jfonts"""
 
     strings = {"name": "JellyColor"}
 
