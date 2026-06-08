@@ -2,6 +2,8 @@
 
 [![Telegram](https://img.shields.io/badge/Telegram-@justidev-2CA5E0?logo=telegram&logoColor=white)](https://t.me/justidev)
 
+![JellyColor Banner](https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/assets/JellyColor.jpg)
+
 **JellyColor** is a module for [Heroku](https://github.com/coddrago/Heroku) that allows you to recolor stickers and custom emojis, apply color gradients, and generate new text-based stickers/emojis from templates with custom font support.
 
 Current version: **v3.7.0**.
