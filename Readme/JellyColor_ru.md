@@ -2,6 +2,9 @@
 
 [![Telegram](https://img.shields.io/badge/Telegram-@justidev-2CA5E0?logo=telegram&logoColor=white)](https://t.me/justidev)
 
+![JellyColor Banner](https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/assets/JellyColor.jpg)
+
+
 **JellyColor** — модуль для [Heroku](https://github.com/coddrago/Heroku), который позволяет перекрашивать стикеры и эмодзи, накладывать градиенты, а также создавать новые стикеры/эмодзи по текстовым шаблонам с поддержкой пользовательских шрифтов.
 
 Актуальная ветка: **v3.7.0**.
