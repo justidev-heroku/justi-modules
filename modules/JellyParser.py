@@ -448,24 +448,29 @@ def _replace_textgroup(lottie, new_shapes):
                 "nm": "Fill 1"
             }]
             
-        new_group = {
-            "ty": "gr",
-            "nm": "TextGroup",
-            "it": new_shapes + styles + [{
-                "ty": "tr",
-                "p": {"a": 0, "k": [0, 0]},
-                "a": {"a": 0, "k": [0, 0]},
-                "s": {"a": 0, "k": [100, 100]},
-                "r": {"a": 0, "k": 0},
-                "o": {"a": 0, "k": 100},
-                "nm": "Transform"
-            }]
-        }
-        
         if target.get("ty") == 4:
-            target["shapes"] = [new_group]
+            # For a ShapeLayer, shapes can be flat
+            target["shapes"] = new_shapes + styles
         else:
-            target["it"] = [new_group]
+            # For a Group, we need to preserve or create a transform shape "tr"
+            original_tr = None
+            for x in target.get("it", []):
+                if x.get("ty") == "tr":
+                    original_tr = x
+                    break
+            if not original_tr:
+                original_tr = {
+                    "ty": "tr",
+                    "p": {"a": 0, "k": [0, 0]},
+                    "a": {"a": 0, "k": [0, 0]},
+                    "s": {"a": 0, "k": [100, 100]},
+                    "r": {"a": 0, "k": 0},
+                    "o": {"a": 0, "k": 100},
+                    "sk": {"a": 0, "k": 0},
+                    "sa": {"a": 0, "k": 0},
+                    "nm": "Transform"
+                }
+            target["it"] = new_shapes + styles + [original_tr]
             
     return True
 
@@ -736,6 +741,8 @@ class JellyParserMod(loader.Module):
 
         await status_msg.edit(pe("⏰", PE["clock"]) + f" Скачиваем и парсим {len(docs)} эмодзи...")
 
+        debug_logs = []
+
         async def _check_doc(i, doc):
             mime = getattr(doc, "mime_type", "")
             if mime != "application/x-tgsticker":
@@ -743,13 +750,17 @@ class JellyParserMod(loader.Module):
             try:
                 raw = await download_cached(self._client, doc)
                 decompressed = gzip.decompress(raw)
-                
                 lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
                 bounds = _get_textgroup_bounds(lottie_obj)
+                
+                targets = _find_text_targets(lottie_obj)
+                target_info = f"Target types: {[t.get('ty') for t in targets]}" if targets else "None"
+                debug_logs.append(f"Doc {i} ({getattr(doc, 'id', 'unknown')}): bounds={bounds}, targets={target_info}")
+                
                 if bounds:
                     return doc
-            except Exception:
-                pass
+            except Exception as e:
+                debug_logs.append(f"Doc {i} check failed: {e}")
             return None
 
         filtered_docs = await self._parallel(docs, _check_doc, "Парсинг эмодзи", status_msg)
@@ -786,11 +797,15 @@ class JellyParserMod(loader.Module):
             try:
                 decompressed = gzip.decompress(raw)
                 lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
-                modify_lottie(lottie_obj, "jelly")
+                orig_size = len(decompressed)
+                res = modify_lottie(lottie_obj, "jelly")
+                
                 serialized = orjson.dumps(lottie_obj) if HAS_ORJSON else json.dumps(lottie_obj, separators=(",", ":")).encode("utf-8")
                 raw = gzip.compress(serialized, compresslevel=9)
+                debug_logs.append(f"Doc {i} ({getattr(doc, 'id', 'unknown')}): modify_lottie={res}, orig_size={orig_size}, new_size={len(serialized)}, compressed_size={len(raw)}")
             except Exception as e:
                 logger.error(f"Failed to replace text with jelly for emoji {i}: {e}")
+                debug_logs.append(f"Doc {i} modify failed: {e}")
                 
             buf = io.BytesIO(raw)
             buf.name = "sticker.tgs"
@@ -826,4 +841,11 @@ class JellyParserMod(loader.Module):
                 parse_mode="HTML"
             )
         except Exception as e:
-            await status_msg.edit(pe("❌", PE["err"]) + f" Не удалось создать набор: <code>{e}</code>")
+            debug_path = "/root/jelly_debug.log"
+            try:
+                with open(debug_path, "w", encoding="utf-8") as df:
+                    df.write("\n".join(debug_logs))
+                log_info = f"\n\n📝 Лог отладки сохранен в: <code>{debug_path}</code>"
+            except Exception:
+                log_info = ""
+            await status_msg.edit(pe("❌", PE["err"]) + f" Не удалось создать набор: <code>{e}</code>{log_info}")
