@@ -418,29 +418,61 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     return shapes
 
 
+def _extract_styles(obj):
+    styles = []
+    seen = set()
+    def walk(o):
+        if isinstance(o, dict):
+            ty = o.get("ty")
+            if ty in ("fl", "st", "gf", "gs"):
+                ser = json.dumps(o, sort_keys=True)
+                if ser not in seen:
+                    seen.add(ser)
+                    styles.append(o)
+            for v in o.values():
+                if isinstance(v, (dict, list)):
+                    walk(v)
+        elif isinstance(o, list):
+            for item in o:
+                walk(item)
+    walk(obj)
+    return styles
+
+
 def _replace_textgroup(lottie, new_shapes):
     targets = _find_text_targets(lottie)
     if not targets:
         return False
         
-    def _hfl(items): return any(x.get("ty")=="fl" for x in items)
-    
-    def _islc(item):
-        if item.get("ty")!="gr": return False
-        return not _hfl(item.get("it",[])) and not any(x.get("ty")=="st" for x in item.get("it",[]))
-        
-    def _patch(lst):
-        style = [x for x in lst if x.get("ty") not in ("sh", "el", "rc", "sr") and not _islc(x)]
-        lst[:] = new_shapes + style
-
     for target in targets:
-        if "it" in target:
-            _patch(target.setdefault("it", []))
-        elif "shapes" in target:
-            _patch(target.setdefault("shapes", []))
+        styles = _extract_styles(target)
+        if not styles:
+            styles = [{
+                "ty": "fl",
+                "c": {"a": 0, "k": [1, 1, 1, 1]},
+                "o": {"a": 0, "k": 100},
+                "r": 1,
+                "nm": "Fill 1"
+            }]
+            
+        new_group = {
+            "ty": "gr",
+            "nm": "TextGroup",
+            "it": new_shapes + styles + [{
+                "ty": "tr",
+                "p": {"a": 0, "k": [0, 0]},
+                "a": {"a": 0, "k": [0, 0]},
+                "s": {"a": 0, "k": [100, 100]},
+                "r": {"a": 0, "k": 0},
+                "o": {"a": 0, "k": 100},
+                "nm": "Transform"
+            }]
+        }
+        
+        if target.get("ty") == 4:
+            target["shapes"] = [new_group]
         else:
-            key = "shapes" if target.get("ty") == 4 else "it"
-            _patch(target.setdefault(key, []))
+            target["it"] = [new_group]
             
     return True
 
