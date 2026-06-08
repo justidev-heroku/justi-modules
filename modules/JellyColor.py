@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.3.7                     ║
+# ║                        🎨 JellyColor v4.3.8                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.3.7: кнопка Назад, кастомный масштаб и отмена генерации       ║
+# ║  v4.3.8: кнопка Назад, кастомный масштаб и отмена генерации       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,7 +31,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 3, 7)
+__version__ = (4, 3, 8)
 
 import asyncio
 import glob
@@ -1454,28 +1454,33 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
     except Exception as e:
         err_msg = str(e).lower()
         if "already exists" in err_msg or "already_exists" in err_msg or "short_name_occupied" in err_msg:
-            # Пак уже существует. Пытаемся обновить/пересоздать его.
-            try:
-                fs = await client(functions.messages.GetStickerSetRequest(
-                    stickerset=types.InputStickerSetShortName(short_name=short_name), hash=0
-                ))
-                old_docs = fs.documents
-                
-                for sticker in stickers:
-                    await client(functions.stickers.AddStickerToSetRequest(
-                        stickerset=types.InputStickerSetShortName(short_name=short_name),
-                        sticker=sticker
+            if exists_mode == "recreate":
+                # Режим перезаписи: удаляем старый пак целиком и создаем новый за один шаг
+                # Это работает в ~150 раз быстрее, чем удаление и добавление по одному стикеру
+                try:
+                    await client(functions.stickers.DeleteStickerSetRequest(
+                        stickerset=types.InputStickerSetShortName(short_name=short_name)
                     ))
-                
-                if exists_mode == "recreate":
-                    for doc in old_docs:
-                        await client(functions.stickers.RemoveStickerFromSetRequest(
-                            sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
+                    await asyncio.sleep(0.5)  # даем серверам Telegram освободить имя
+                    await client(functions.stickers.CreateStickerSetRequest(
+                        user_id=uid, title=title, short_name=short_name, stickers=stickers, emojis=is_emoji,
+                    ))
+                    return short_name, None
+                except Exception as del_err:
+                    logger.exception(f"Failed to recreate stickerpack via delete {short_name}")
+                    return None, f"Не удалось перезаписать пак: {del_err}"
+            else:
+                # Режим добавления: дописываем новые стикеры в конец пака
+                try:
+                    for sticker in stickers:
+                        await client(functions.stickers.AddStickerToSetRequest(
+                            stickerset=types.InputStickerSetShortName(short_name=short_name),
+                            sticker=sticker
                         ))
-                return short_name, None
-            except Exception as add_err:
-                logger.exception(f"Failed to update existing stickerpack {short_name}")
-                return None, f"Не удалось обновить существующий пак: {add_err}"
+                    return short_name, None
+                except Exception as add_err:
+                    logger.exception(f"Failed to append stickers to existing stickerpack {short_name}")
+                    return None, f"Не удалось добавить стикеры в пак: {add_err}"
         
         logger.exception(f"CreateStickerSetRequest failed for {short_name}")
         return None, str(e)
