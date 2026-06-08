@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.9                     ║
+# ║                        🔮 JellyParser v0.3.0                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.2.9: sibling-fill детекция цвета текста для белых/тёмных фонов ║
+# ║ v0.3.0: TGS size guard и сжатие стикеров до лимита 64 КБ        ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -35,6 +35,7 @@ import gzip
 import io
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -59,7 +60,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 9)
+__version__ = (0, 3, 0)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -814,6 +815,73 @@ def _optimize_lottie_floats(o):
     return o
 
 
+# ─── TGS size guard ───────────────────────────────────────────────────────────
+
+MAX_TGS_SIZE = 63 * 1024
+
+
+def json_dumps(obj: dict) -> bytes:
+    if HAS_ORJSON:
+        return orjson.dumps(obj)
+    return json.dumps(obj, separators=(",", ":")).encode("utf-8")
+
+
+def compress_tgs(lottie: dict) -> bytes:
+    raw = json_dumps(lottie)
+    compressed = gzip.compress(raw, compresslevel=3)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
+
+    def _strip_names(obj):
+        if isinstance(obj, dict):
+            obj.pop("nm", None)
+            obj.pop("mn", None)
+            for v in obj.values():
+                _strip_names(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _strip_names(item)
+    _strip_names(lottie)
+    raw = json_dumps(lottie)
+    compressed = gzip.compress(raw, compresslevel=3)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
+
+    def _round_floats(obj, precision=2):
+        if isinstance(obj, float):
+            return round(obj, precision) if math.isfinite(obj) else obj
+        elif isinstance(obj, dict):
+            for k, v in list(obj.items()):
+                obj[k] = _round_floats(v, precision)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                obj[i] = _round_floats(v, precision)
+        return obj
+    _round_floats(lottie, 2)
+    raw = json_dumps(lottie)
+    compressed = gzip.compress(raw, compresslevel=3)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
+
+    # Try higher compression level
+    compressed = gzip.compress(raw, compresslevel=9)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
+
+    # Try precision=1
+    _round_floats(lottie, 1)
+    raw = json_dumps(lottie)
+    compressed = gzip.compress(raw, compresslevel=9)
+    if len(compressed) <= MAX_TGS_SIZE:
+        return compressed
+
+    # Try precision=0
+    _round_floats(lottie, 0)
+    raw = json_dumps(lottie)
+    compressed = gzip.compress(raw, compresslevel=9)
+    return compressed
+
+
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if not font_path:
         font_path = _ensure_font()
@@ -1073,11 +1141,8 @@ class JellyParserMod(loader.Module):
                 lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
                 orig_size = len(decompressed)
                 res = modify_lottie(lottie_obj, "jelly")
-                lottie_obj = _optimize_lottie_floats(lottie_obj)
-                
-                serialized = orjson.dumps(lottie_obj) if HAS_ORJSON else json.dumps(lottie_obj, separators=(",", ":")).encode("utf-8")
-                raw = gzip.compress(serialized, compresslevel=9)
-                debug_logs.append(f"Doc {i} ({getattr(doc, 'id', 'unknown')}): modify_lottie={res}, orig_size={orig_size}, new_size={len(serialized)}, compressed_size={len(raw)}")
+                raw = compress_tgs(lottie_obj)
+                debug_logs.append(f"Doc {i} ({getattr(doc, 'id', 'unknown')}): modify_lottie={res}, orig_size={orig_size}, compressed_size={len(raw)}")
             except Exception as e:
                 logger.error(f"Failed to replace text with jelly for emoji {i}: {e}")
                 debug_logs.append(f"Doc {i} modify failed: {e}")
