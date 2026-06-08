@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.1                     ║
+# ║                        🔮 JellyParser v0.2.2                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║        v0.2.1: плоская Lottie структура и встроенная отладка      ║
+# ║        v0.2.2: плоская Lottie структура и встроенная отладка      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -59,7 +59,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 1)
+__version__ = (0, 2, 2)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -541,6 +541,16 @@ def _replace_username(lottie, new_text, font_path):
     return replaced
 
 
+def _optimize_lottie_floats(o):
+    if isinstance(o, float):
+        return round(o, 3)
+    elif isinstance(o, dict):
+        return {k: _optimize_lottie_floats(v) for k, v in o.items()}
+    elif isinstance(o, list):
+        return [_optimize_lottie_floats(x) for x in o]
+    return o
+
+
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if not font_path:
         font_path = _ensure_font()
@@ -799,6 +809,7 @@ class JellyParserMod(loader.Module):
                 lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
                 orig_size = len(decompressed)
                 res = modify_lottie(lottie_obj, "jelly")
+                lottie_obj = _optimize_lottie_floats(lottie_obj)
                 
                 serialized = orjson.dumps(lottie_obj) if HAS_ORJSON else json.dumps(lottie_obj, separators=(",", ":")).encode("utf-8")
                 raw = gzip.compress(serialized, compresslevel=9)
