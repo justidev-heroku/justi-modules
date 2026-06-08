@@ -295,13 +295,13 @@ def _find_text_targets(lottie):
         ty = el.get("ty")
         if ty == 4 or ty == "gr":
             if _is_keyword_match(el):
-                if _count_paths(el) >= 1 and _has_fill(el):
+                if _count_paths(el) >= 1:
                     named_targets.append(el)
                         
     if named_targets:
         final_targets = []
         for cand in named_targets:
-            if any(_is_descendant(cand, t) for t in named_targets if t is not cand):
+            if any(_is_descendant(t, cand) for t in named_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
@@ -320,7 +320,7 @@ def _find_text_targets(lottie):
     if fallback_targets:
         final_targets = []
         for cand in fallback_targets:
-            if any(_is_descendant(cand, t) for t in fallback_targets if t is not cand):
+            if any(_is_descendant(t, cand) for t in fallback_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
