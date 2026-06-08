@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.5                     ║
+# ║                        🔮 JellyParser v0.2.6                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║        v0.2.5: плоская Lottie структура и встроенная отладка      ║
+# ║     v0.2.6: рендеринг-контрастность текста через python-lottie    ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -27,7 +27,7 @@
 # SOFTWARE.
 #
 # meta developer: @justidev
-# requires: Pillow fonttools
+# requires: Pillow fonttools lottie
 
 import asyncio
 import glob
@@ -57,9 +57,22 @@ try:
 except ImportError:
     HAS_FONTTOOLS = False
 
+try:
+    from lottie.parsers.tgs import parse_tgs
+    from lottie.exporters.cairo import export_png as _lottie_export_png
+    HAS_LOTTIE_RENDER = True
+except ImportError:
+    HAS_LOTTIE_RENDER = False
+
+try:
+    from PIL import Image as _PILImage
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 5)
+__version__ = (0, 2, 6)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -432,54 +445,102 @@ def _extract_styles(obj):
     return styles
 
 
-def _is_lottie_light(lottie, text_targets):
+def _render_analyze_luminance(raw_data, bounds=None):
+    """Render lottie to PNG via python-lottie and analyze pixel luminance
+    in the text region. Returns luminance 0.0-1.0 or None on failure."""
+    if not (HAS_LOTTIE_RENDER and HAS_PIL):
+        return None
+    try:
+        buf = io.BytesIO(raw_data)
+        anim = parse_tgs(buf)
+        png_buf = io.BytesIO()
+        _lottie_export_png(anim, png_buf, frame=0)
+        png_buf.seek(0)
+        img = _PILImage.open(png_buf).convert("RGBA")
+        w, h = img.size
+        anim_w = anim.width or 512
+        anim_h = anim.height or 512
+
+        if bounds:
+            bx1, by1, bx2, by2 = bounds
+            sx, sy = w / anim_w, h / anim_h
+            pad_x = int(abs(bx2 - bx1) * sx * 0.35)
+            pad_y = int(abs(by2 - by1) * sy * 0.35)
+            px1 = max(0, int(bx1 * sx) - pad_x)
+            py1 = max(0, int(by1 * sy) - pad_y)
+            px2 = min(w, int(bx2 * sx) + pad_x)
+            py2 = min(h, int(by2 * sy) + pad_y)
+        else:
+            px1, py1 = int(w * 0.15), int(h * 0.15)
+            px2, py2 = int(w * 0.85), int(h * 0.85)
+
+        region_w = max(px2 - px1, 1)
+        region_h = max(py2 - py1, 1)
+        step = max(1, min(region_w, region_h) // 25)
+        pixels = []
+        for x in range(px1, px2, step):
+            for y in range(py1, py2, step):
+                r, g, b, a = img.getpixel((x, y))
+                if a > 30:
+                    pixels.append((r, g, b))
+
+        if not pixels:
+            return None
+
+        avg_r = sum(p[0] for p in pixels) / len(pixels)
+        avg_g = sum(p[1] for p in pixels) / len(pixels)
+        avg_b = sum(p[2] for p in pixels) / len(pixels)
+        lum = (0.2126 * avg_r + 0.7152 * avg_g + 0.0722 * avg_b) / 255.0
+        return lum
+    except Exception as e:
+        logger.debug(f"_render_analyze_luminance failed: {e}")
+        return None
+
+
+def _is_lottie_light_fallback(lottie, text_targets):
+    """Fallback: analyze fill colors from JSON when render is unavailable."""
     colors = []
-    
     def walk(o, is_in_target=False):
         if not isinstance(o, (dict, list)):
             return
         if isinstance(o, dict):
             if o in text_targets:
                 is_in_target = True
-            
             ty = o.get("ty")
             if ty == "fl" and not is_in_target:
                 c_k = o.get("c", {}).get("k", [])
                 if isinstance(c_k, list) and len(c_k) >= 3:
                     if all(isinstance(x, (int, float)) for x in c_k[:3]):
                         colors.append(c_k[:3])
-            elif ty == "gf" and not is_in_target:
-                g_k = o.get("g", {}).get("k", [])
-                if isinstance(g_k, list) and len(g_k) >= 4:
-                    i = 0
-                    while i + 3 < len(g_k):
-                        if all(isinstance(x, (int, float)) for x in g_k[i:i+4]):
-                            colors.append(g_k[i+1:i+4])
-                        i += 4
-                        if i > 12:
-                            break
-            
             for v in o.values():
                 walk(v, is_in_target)
         else:
             for item in o:
                 walk(item, is_in_target)
-                
     walk(lottie)
     if not colors:
         return False
-        
     lums = [0.2126*r + 0.7152*g + 0.0722*b for r, g, b in colors]
-    avg_lum = sum(lums) / len(lums)
-    return avg_lum > 0.45
+    return (sum(lums) / len(lums)) > 0.45
 
 
-def _replace_textgroup(lottie, new_shapes, height=None):
+def _replace_textgroup(lottie, new_shapes, height=None, raw_data=None, bounds=None):
     targets = _find_text_targets(lottie)
     if not targets:
         return False
-        
-    is_light = _is_lottie_light(lottie, targets)
+
+    # Primary: render-based luminance analysis (accurate)
+    is_light = None
+    if raw_data:
+        lum = _render_analyze_luminance(raw_data, bounds=bounds)
+        if lum is not None:
+            is_light = lum > 0.45
+            logger.debug(f"Render-based luminance: {lum:.3f}, is_light={is_light}")
+    # Fallback: JSON fill color analysis
+    if is_light is None:
+        is_light = _is_lottie_light_fallback(lottie, targets)
+        logger.debug(f"Fallback luminance analysis, is_light={is_light}")
+
     if is_light:
         fill_color = [0.05, 0.05, 0.05, 1]
     else:
@@ -597,7 +658,7 @@ def _optimize_lottie_floats(o):
     return o
 
 
-def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
+def modify_lottie(lottie: dict, new_text: str, font_path: str = None, raw_data: bytes = None) -> bool:
     if not font_path:
         font_path = _ensure_font()
     if not font_path:
@@ -610,7 +671,7 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
         cy = (y1 + y2) / 2
         height = max(abs(y2 - y1), 5.)
         ns = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width=max(abs(x2 - x1), 5.))
-        if ns and _replace_textgroup(lottie, ns, height):
+        if ns and _replace_textgroup(lottie, ns, height, raw_data=raw_data, bounds=bounds):
             changed = True
     if _find_username_bounds(lottie):
         if _replace_username(lottie, NEW_USERNAME, font_path):
@@ -855,7 +916,7 @@ class JellyParserMod(loader.Module):
                 decompressed = gzip.decompress(raw)
                 lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
                 orig_size = len(decompressed)
-                res = modify_lottie(lottie_obj, "jelly")
+                res = modify_lottie(lottie_obj, "jelly", raw_data=raw)
                 lottie_obj = _optimize_lottie_floats(lottie_obj)
                 
                 serialized = orjson.dumps(lottie_obj) if HAS_ORJSON else json.dumps(lottie_obj, separators=(",", ":")).encode("utf-8")
