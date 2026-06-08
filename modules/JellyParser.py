@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.3.0                     ║
+# ║                        🔮 JellyParser v0.3.1                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.3.0: TGS size guard и сжатие стикеров до лимита 64 КБ        ║
+# ║ v0.3.1: Поддержка native text layers (ty=5) и лимит TGS 60 KB    ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -60,7 +60,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 3, 0)
+__version__ = (0, 3, 1)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -716,6 +716,13 @@ def _replace_textgroup(lottie, new_shapes, height=None):
             "nm": "Fill 1"
         }]
 
+        if target.get("ty") == 5:
+            # Native text layer: convert to shape layer
+            target["ty"] = 4
+            target.pop("t", None)
+            target["shapes"] = new_shapes + styles
+            continue
+
         # target is always a "gr" group — preserve its transform "tr"
         original_tr = None
         for x in target.get("it", []):
@@ -817,7 +824,7 @@ def _optimize_lottie_floats(o):
 
 # ─── TGS size guard ───────────────────────────────────────────────────────────
 
-MAX_TGS_SIZE = 63 * 1024
+MAX_TGS_SIZE = 60 * 1024
 
 
 def json_dumps(obj: dict) -> bytes:
