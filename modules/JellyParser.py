@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.2                     ║
+# ║                        🔮 JellyParser v0.2.3                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║        v0.2.2: плоская Lottie структура и встроенная отладка      ║
+# ║        v0.2.3: плоская Lottie структура и встроенная отладка      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -59,7 +59,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 2)
+__version__ = (0, 2, 3)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -432,7 +432,7 @@ def _extract_styles(obj):
     return styles
 
 
-def _replace_textgroup(lottie, new_shapes):
+def _replace_textgroup(lottie, new_shapes, height=None):
     targets = _find_text_targets(lottie)
     if not targets:
         return False
@@ -447,6 +447,19 @@ def _replace_textgroup(lottie, new_shapes):
                 "r": 1,
                 "nm": "Fill 1"
             }]
+            
+        if height is not None:
+            stroke_width = max(height * 0.08, 1.5)
+            stroke_style = {
+                "ty": "st",
+                "nm": "TextOutline",
+                "c": {"a": 0, "k": [0, 0, 0, 1]},
+                "o": {"a": 0, "k": 100},
+                "w": {"a": 0, "k": stroke_width},
+                "lc": 1,
+                "lj": 1
+            }
+            styles.insert(0, stroke_style)
             
         if target.get("ty") == 4:
             # For a ShapeLayer, shapes can be flat
@@ -562,8 +575,9 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
         x1, y1, x2, y2 = bounds
         cx = (x1 + x2) / 2
         cy = (y1 + y2) / 2
-        ns = _text_to_lottie_shapes(new_text, font_path, cx, cy, max(abs(y2 - y1), 5.), max_width=max(abs(x2 - x1), 5.))
-        if ns and _replace_textgroup(lottie, ns):
+        height = max(abs(y2 - y1), 5.)
+        ns = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width=max(abs(x2 - x1), 5.))
+        if ns and _replace_textgroup(lottie, ns, height):
             changed = True
     if _find_username_bounds(lottie):
         if _replace_username(lottie, NEW_USERNAME, font_path):
