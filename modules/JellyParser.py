@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.7                     ║
+# ║                        🔮 JellyParser v0.2.8                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║     v0.2.7: аналитическая контрастность и поддержка групп-букв     ║
+# ║     v0.2.8: аналитическая контрастность и корректный автоцвет      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -72,7 +72,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 7)
+__version__ = (0, 2, 8)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -293,7 +293,7 @@ def _is_keyword_match(el):
         nm_lower = nm.lower()
         if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
             return True
-    return False
+    return _has_keyword_child(el)
 
 
 def _find_text_targets(lottie):
@@ -314,7 +314,7 @@ def _find_text_targets(lottie):
     if named_targets:
         final_targets = []
         for cand in named_targets:
-            if any(_is_descendant(cand, t) for t in named_targets if t is not cand):
+            if any(_is_descendant(t, cand) for t in named_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
@@ -333,7 +333,7 @@ def _find_text_targets(lottie):
     if fallback_targets:
         final_targets = []
         for cand in fallback_targets:
-            if any(_is_descendant(cand, t) for t in fallback_targets if t is not cand):
+            if any(_is_descendant(t, cand) for t in fallback_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
