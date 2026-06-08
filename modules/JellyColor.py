@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.4.2                     ║
+# ║                        🎨 JellyColor v4.4.1                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.4.2: кнопка Назад, улучшенный парсер и стили textGroup        ║
+# ║  v4.4.1: кнопка Назад, кастомный масштаб и отмена генерации       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,10 +31,8 @@
 # requires: Pillow fonttools orjson
 #
 # modification: JellyColor manual scale adjustment and preview feature
-#
-# version bump: improved text targeting parser
 
-__version__ = (4, 4, 2)
+__version__ = (4, 4, 1)
 
 import asyncio
 import glob
@@ -913,145 +911,79 @@ def _verts_to_bounds(verts):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def _get_all_elements(lottie):
-    def _walk_layer(layer):
-        yield layer
-        if "shapes" in layer:
-            for s in layer["shapes"]:
-                yield from _walk_shape(s)
-        if "it" in layer:
-            for s in layer["it"]:
-                yield from _walk_shape(s)
-
-    def _walk_shape(shape):
-        yield shape
-        if "it" in shape:
-            for s in shape["it"]:
-                yield from _walk_shape(s)
-        if "shapes" in shape:
-            for s in shape["shapes"]:
-                yield from _walk_shape(s)
-
-    if "layers" in lottie:
-        for l in lottie["layers"]:
-            yield from _walk_layer(l)
-            
-    if "assets" in lottie:
-        for a in lottie["assets"]:
-            if "layers" in a:
-                for l in a["layers"]:
-                    yield from _walk_layer(l)
-
-
-def _is_descendant(child, parent):
-    found = False
-    def _check(o):
-        nonlocal found
-        if found: return
-        if isinstance(o, dict):
-            if o is child:
-                found = True
-                return
-            for val in o.values(): _check(val)
-        elif isinstance(o, list):
-            for item in o: _check(item)
-    if "shapes" in parent:
-        for s in parent["shapes"]: _check(s)
-    if "it" in parent:
-        for s in parent["it"]: _check(s)
-    return found
-
-
-def _has_keyword_child(obj):
-    keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"]
-    found = False
-    def _check(o):
-        nonlocal found
-        if found: return
-        if isinstance(o, dict):
-            nm = o.get("nm")
-            if isinstance(nm, str) and nm:
-                nm_lower = nm.lower()
-                if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
-                    found = True
-                    return
-            for val in o.values(): _check(val)
-        elif isinstance(o, list):
-            for item in o: _check(item)
-    if isinstance(obj, dict):
-        for val in obj.values(): _check(val)
-    return found
-
-
-def _is_keyword_match(el):
-    keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"]
-    nm = el.get("nm")
-    if isinstance(nm, str) and nm:
-        nm_lower = nm.lower()
-        if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
-            return True
-    return _has_keyword_child(el)
-
-
-def _find_text_targets(lottie):
-    elements = list(_get_all_elements(lottie))
-    
-    text_layers = [el for el in elements if el.get("ty") == 5]
-    if text_layers:
-        return text_layers
-
-    named_targets = []
-    for el in elements:
-        ty = el.get("ty")
-        if ty == 4 or ty == "gr":
-            if _is_keyword_match(el):
-                if _count_paths(el) >= 1 and _has_fill(el):
-                    named_targets.append(el)
-                        
-    if named_targets:
-        final_targets = []
-        for cand in named_targets:
-            if any(_is_descendant(cand, t) for t in named_targets if t is not cand):
-                continue
-            final_targets.append(cand)
-        return final_targets
-
-    fallback_targets = []
-    for el in elements:
-        ty = el.get("ty")
-        if ty == "gr":
-            nm = el.get("nm")
-            nm_lower = (nm.lower() if isinstance(nm, str) else "")
-            if "user" not in nm_lower:
-                cnsh = _count_paths(el)
-                if 2 <= cnsh <= 15 and _has_fill(el):
-                    fallback_targets.append(el)
-                    
-    if fallback_targets:
-        final_targets = []
-        for cand in fallback_targets:
-            if any(_is_descendant(cand, t) for t in fallback_targets if t is not cand):
-                continue
-            final_targets.append(cand)
-        return final_targets
-
-    return []
-
-
 def _get_textgroup_bounds(lottie):
-    targets = _find_text_targets(lottie)
-    if targets:
-        target = targets[0]
-        if target.get("ty") == 5:
-            pos = target.get("ks", {}).get("p", {}).get("k", [0, 0])
-            cx, cy = (pos[0], pos[1]) if (isinstance(pos, list) and len(pos) >= 2) else (0.0, 0.0)
-            font_size = 50.0
-            max_width = 512.0
-            return (cx - max_width / 2.0, cy - font_size / 2.0, cx + max_width / 2.0, cy + font_size / 2.0)
-            
-        verts = _collect_path_verts(target)
+    def find_named(obj):
+        if isinstance(obj, dict):
+            if obj.get("ty")=="gr" and obj.get("nm")=="TextGroup":
+                b=_verts_to_bounds(_collect_path_verts(obj))
+                if b: return b
+            for v in obj.values():
+                r=find_named(v)
+                if r: return r
+        elif isinstance(obj, list):
+            for item in obj:
+                r=find_named(item)
+                if r: return r
+        return None
+    b=find_named(lottie)
+    if b: return b
+
+    def find_text_layer(layers):
+        for layer in layers:
+            if layer.get("ty")!=4: continue
+            nm=layer.get("nm",""); shapes=layer.get("shapes",[])
+            n_sh=sum(1 for s in shapes if s.get("ty")=="sh")
+            has_fl=any(s.get("ty")=="fl" for s in shapes)
+            if ("text" in nm.lower() or "Text" in nm) and n_sh>=2 and has_fl:
+                b=_verts_to_bounds(_collect_path_verts({"shapes":shapes}))
+                if b: return b
+        return None
+
+    all_ll=[lottie.get("layers",[])]+[a.get("layers",[]) for a in lottie.get("assets",[])]
+    for ll in all_ll:
+        b=find_text_layer(ll)
+        if b: return b
+
+    def _gfl(gr): return any(x.get("ty")=="fl" for x in gr.get("it",[]))
+    def _cdsh(gr): return sum(1 for x in gr.get("it",[]) if x.get("ty")=="sh")
+    def _cnsh(gr):
+        n=0
+        for x in gr.get("it",[]):
+            n+=1 if x.get("ty")=="sh" else (_cnsh(x) if x.get("ty")=="gr" else 0)
+        return n
+
+    matched = []
+    def walk(obj, path=()):
+        if isinstance(obj, dict):
+            if obj.get("ty")=="gr" and _gfl(obj) and (_cdsh(obj)==0 or _cdsh(obj)>=3) and _cnsh(obj)>=3:
+                matched.append((obj, path))
+            for k, v in obj.items():
+                walk(v, path + (k,))
+        elif isinstance(obj, list):
+            for i, x in enumerate(obj):
+                walk(x, path + (i,))
+
+    walk(lottie)
+
+    filtered_matched = []
+    for gr1, p1 in matched:
+        is_ancestor = False
+        for gr2, p2 in matched:
+            if len(p1) < len(p2) and p2[:len(p1)] == p1:
+                is_ancestor = True
+                break
+        if not is_ancestor:
+            filtered_matched.append(gr1)
+
+    for gr in filtered_matched:
+        verts = _collect_path_verts(gr)
         if verts:
-            return _verts_to_bounds(verts)
+            xs=[v[0] for v in verts]; ys=[v[1] for v in verts]
+            w=max(xs)-min(xs); h=max(ys)-min(ys)+1e-9
+            if w>h*1.3 or w>0:
+                b = _verts_to_bounds(verts)
+                if b: return b
+
     return None
 
 
@@ -1120,63 +1052,117 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     return shapes
 
 
-def _extract_styles(obj):
-    styles = []
-    seen = set()
-    def walk(o):
-        if isinstance(o, dict):
-            ty = o.get("ty")
-            if ty in ("fl", "st", "gf", "gs"):
-                ser = json.dumps(o, sort_keys=True)
-                if ser not in seen:
-                    seen.add(ser)
-                    styles.append(o)
-            for v in o.values():
-                if isinstance(v, (dict, list)):
-                    walk(v)
-        elif isinstance(o, list):
-            for item in o:
-                walk(item)
-    walk(obj)
-    return styles
-
 
 def _replace_textgroup(lottie, new_shapes):
-    targets = _find_text_targets(lottie)
-    if not targets:
-        return False
+    patched_any = False
+    
+    def _hfl(items): return any(x.get("ty")=="fl" for x in items)
+    
+    def _islc(item):
+        if item.get("ty")!="gr": return False
+        return not _hfl(item.get("it",[])) and not any(x.get("ty")=="st" for x in item.get("it",[]))
         
-    for target in targets:
-        styles = _extract_styles(target)
-        if not styles:
-            styles = [{
-                "ty": "fl",
-                "c": {"a": 0, "k": [1, 1, 1, 1]},
-                "o": {"a": 0, "k": 100},
-                "r": 1,
-                "nm": "Fill 1"
-            }]
+    def _patch(lst):
+        nonlocal patched_any
+        style=[x for x in lst if x.get("ty") not in ("sh","el","rc","sr") and not _islc(x)]
+        lst[:]=new_shapes+style
+        patched_any = True
+
+    # 1. Try to find by explicit names: "TextGroup", "Text", "text" (excluding username)
+    matched_named = []
+    def walk_named(obj, path=()):
+        if isinstance(obj, dict):
+            nm = obj.get("nm", "")
+            if isinstance(nm, str) and nm:
+                nm_lower = nm.lower()
+                # Exclude username groups
+                if "user" not in nm_lower:
+                    if obj.get("ty") == "gr" and ("textgroup" in nm_lower or nm_lower == "text"):
+                        matched_named.append((obj, path))
+            for k, v in obj.items():
+                walk_named(v, path + (k,))
+        elif isinstance(obj, list):
+            for i, x in enumerate(obj):
+                walk_named(x, path + (i,))
+
+    walk_named(lottie)
+    if matched_named:
+        # Filter ancestors
+        filtered = []
+        for gr1, p1 in matched_named:
+            is_ancestor = False
+            for gr2, p2 in matched_named:
+                if len(p1) < len(p2) and p2[:len(p1)] == p1:
+                    is_ancestor = True
+                    break
+            if not is_ancestor:
+                filtered.append(gr1)
+        for gr in filtered:
+            _patch(gr.setdefault("it", []))
             
-        new_group = {
-            "ty": "gr",
-            "nm": "TextGroup",
-            "it": new_shapes + styles + [{
-                "ty": "tr",
-                "p": {"a": 0, "k": [0, 0]},
-                "a": {"a": 0, "k": [0, 0]},
-                "s": {"a": 0, "k": [100, 100]},
-                "r": {"a": 0, "k": 0},
-                "o": {"a": 0, "k": 100},
-                "nm": "Transform"
-            }]
-        }
-        
-        if target.get("ty") == 4:
-            target["shapes"] = [new_group]
-        else:
-            target["it"] = [new_group]
-            
-    return True
+    if patched_any:
+        return True
+
+    # 2. Try to find by shape layers containing "text" in name
+    def try_ll(layers):
+        for layer in layers:
+            if layer.get("ty")!=4: continue
+            shapes=layer.get("shapes",[]); nm=layer.get("nm","")
+            if not isinstance(nm, str): continue
+            nm_lower = nm.lower()
+            if "user" in nm_lower: continue
+            n=sum(1 for s in shapes if s.get("ty")=="sh")
+            fl=any(s.get("ty")=="fl" for s in shapes)
+            if ("text" in nm_lower and n>=2 and fl) or (n>=3 and fl):
+                _patch(shapes)
+
+    for ll in [lottie.get("layers",[])]+[a.get("layers",[]) for a in lottie.get("assets",[])]:  
+        try_ll(ll)
+
+    if patched_any:
+        return True
+
+    # 3. Fallback heuristic (only if name matching failed)
+    def _cdsh(gr): return sum(1 for x in gr.get("it",[]) if x.get("ty")=="sh")
+    def _cnsh(gr):
+        n=0
+        for x in gr.get("it",[]):
+            n+=1 if x.get("ty")=="sh" else (_cnsh(x) if x.get("ty")=="gr" else 0)
+        return n
+
+    matched_heuristic = []
+    def walk_heuristic(obj, path=()):
+        if isinstance(obj, dict):
+            nm = obj.get("nm", "")
+            nm_lower = nm.lower() if isinstance(nm, str) else ""
+            if "user" not in nm_lower:
+                if obj.get("ty") == "gr" and _hfl(obj.get("it",[])):
+                    # Text placeholders like "jelly" have between 3 and 12 shapes usually
+                    # Complex drawings like a car outline have many more
+                    num_shapes = _cnsh(obj)
+                    if (_cdsh(obj)==0 or _cdsh(obj)>=3) and 3 <= num_shapes <= 12:
+                        matched_heuristic.append((obj, path))
+            for k, v in obj.items():
+                walk_heuristic(v, path + (k,))
+        elif isinstance(obj, list):
+            for i, x in enumerate(obj):
+                walk_heuristic(x, path + (i,))
+
+    walk_heuristic(lottie)
+    if matched_heuristic:
+        filtered = []
+        for gr1, p1 in matched_heuristic:
+            is_ancestor = False
+            for gr2, p2 in matched_heuristic:
+                if len(p1) < len(p2) and p2[:len(p1)] == p1:
+                    is_ancestor = True
+                    break
+            if not is_ancestor:
+                filtered.append(gr1)
+        for gr in filtered:
+            _patch(gr.setdefault("it", []))
+
+    return patched_any
 
 
 
