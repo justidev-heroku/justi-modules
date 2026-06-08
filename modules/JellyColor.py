@@ -27,6 +27,7 @@
 # SOFTWARE.
 #
 # meta developer: @justidev
+# meta banner: https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/assets/JellyColor.jpg
 # requires: Pillow fonttools orjson
 #
 # modification: JellyColor manual scale adjustment and preview feature
