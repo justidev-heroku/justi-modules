@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.8                     ║
+# ║                        🔮 JellyParser v0.2.9                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.2.8: фикс белого фона + трёхэтапный контраст + доп. проверка  ║
+# ║ v0.2.9: sibling-fill детекция цвета текста для белых/тёмных фонов ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -59,7 +59,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 8)
+__version__ = (0, 2, 9)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -442,98 +442,12 @@ def _extract_styles(obj):
 
 def _is_lottie_light(lottie, text_targets):
     """
-    Определяет цвет текста: белый (False) или тёмный (True).
-
-    Трёхэтапная логика:
-
-    1. Смотрим fill-цвета ВНУТРИ текстовых таргетов.
-       Если есть ЦВЕТНОЙ тёмный fill (lum < 0.4, не серый/чёрный) — это фоновая
-       плашка тёмного цвета под текстом → белый текст (False).
-       Серый/чёрный (max-min < 0.08) игнорируем — это текст предыдущей замены или outline.
-       Белый (lum >= 0.95, серый) тоже игнорируем — это текст предыдущей замены.
-
-    2. Собираем ВСЕ цвета эмодзи (fills + градиенты, вне таргетов).
-       Если минимальная яркость < 0.35 — есть тёмные элементы → белый текст (False).
-       Это ловит тёмные подиумы/фоны, нарисованные fills.
-
-    3. Если min >= 0.35: смотрим медианную яркость (fills + градиенты).
-       median >= 0.65 → фон светлый → тёмный текст (True).
-       Иначе → белый текст (False).
-
-    ИСПРАВЛЕНО в v0.2.7:
-    - Правильный парсинг градиентов: g.k.k (вложенный объект) + g.p (кол-во стопов)
-      Ранее g.k читался как список напрямую, но на деле это объект {k:[...], a:0},
-      поэтому isinstance(g_k, list) возвращало False и градиенты игнорировались.
-    - Градиенты (gf/gs) теперь включены в оба шага (min + median).
-    - Убрана инверсия: fill внутри таргета = белый/серый → это старый текст, игнорируем.
+    Fallback-определение цвета текста, когда sibling fill недоступен.
+    Возвращает True (тёмный текст) если фон светлый, False (белый текст) если тёмный.
     """
     def _lum(rgb):
         return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
 
-    def _is_gray(rgb):
-        return max(rgb) - min(rgb) < 0.08
-
-    def _parse_gradient_colors(o):
-        """Правильный парсинг цветов из gf/gs объекта с учётом g.p и вложенного g.k.k"""
-        g = o.get("g", {})
-        p = g.get("p", 0) if isinstance(g, dict) else 0
-        gk = g.get("k", {}) if isinstance(g, dict) else {}
-        # g.k может быть объектом {k: [...], a: 0} или сразу списком
-        if isinstance(gk, dict):
-            gk = gk.get("k", [])
-        if not isinstance(gk, list):
-            return []
-        colors = []
-        if p > 0:
-            # Берём только цветовые стопы: первые p*4 значений [pos, r, g, b, ...]
-            color_data = gk[: p * 4]
-            i = 0
-            while i + 3 < len(color_data):
-                r_, gg_, b_ = color_data[i + 1: i + 4]
-                if all(isinstance(x, (int, float)) for x in (r_, gg_, b_)):
-                    colors.append((float(r_), float(gg_), float(b_)))
-                i += 4
-        else:
-            # Fallback без p: парсим пока позиция в [0..1]
-            i = 0
-            while i + 3 < len(gk):
-                v4 = gk[i: i + 4]
-                if all(isinstance(x, (int, float)) for x in v4):
-                    pos = v4[0]
-                    if 0.0 <= pos <= 1.0 and all(0.0 <= c <= 1.0 for c in v4[1:4]):
-                        colors.append((float(v4[1]), float(v4[2]), float(v4[3])))
-                        i += 4
-                    else:
-                        break
-                else:
-                    i += 1
-        return colors
-
-    # --- Шаг 1: цветной тёмный fill внутри текстового таргета ---
-    target_fills = []
-
-    def walk_target(o):
-        if isinstance(o, dict):
-            if o.get("ty") == "fl":
-                ck = o.get("c", {}).get("k", [])
-                if isinstance(ck, list) and len(ck) >= 3 and all(isinstance(x, (int, float)) for x in ck[:3]):
-                    target_fills.append(tuple(float(x) for x in ck[:3]))
-            for v in o.values():
-                if isinstance(v, (dict, list)):
-                    walk_target(v)
-        elif isinstance(o, list):
-            for item in o:
-                walk_target(item)
-
-    for t in text_targets:
-        walk_target(t)
-
-    # Игнорируем серые/белые fills внутри таргета — это текст от предыдущего парсинга
-    colored_target_fills = [c for c in target_fills if not _is_gray(c) and _lum(c) < 0.95]
-    if any(_lum(c) < 0.4 for c in colored_target_fills):
-        return False  # цветной тёмный фон плашки → белый текст
-
-    # --- Шаги 2 и 3: яркость всего эмодзи (вне таргетов), fills + градиенты ---
     text_target_ids = set(id(t) for t in text_targets)
     all_lums = []
 
@@ -548,7 +462,7 @@ def _is_lottie_light(lottie, text_targets):
                     if isinstance(ck, list) and len(ck) >= 3 and all(isinstance(x, (int, float)) for x in ck[:3]):
                         all_lums.append(_lum(tuple(float(x) for x in ck[:3])))
                 elif ty in ("gf", "gs"):
-                    for c in _parse_gradient_colors(o):
+                    for c in _extract_gradient_colors(o):
                         all_lums.append(_lum(c))
             for v in o.values():
                 if isinstance(v, (dict, list)):
@@ -560,17 +474,69 @@ def _is_lottie_light(lottie, text_targets):
     walk(lottie)
 
     if not all_lums:
-        return False  # умолчание: белый текст
+        return False
 
     min_lum = min(all_lums)
-    # Шаг 2: есть тёмные элементы → белый текст
     if min_lum < 0.35:
         return False
 
-    # Шаг 3: всё светлое — смотрим медиану
     lums = sorted(all_lums)
     median_lum = lums[len(lums) // 2]
     return median_lum >= 0.65
+
+
+def _get_sibling_fill_color(lottie, targets):
+    """
+    v0.2.9: Определяет цвет текста через sibling fill в родительской группе.
+
+    Структура эмодзи:
+        Parent Group (e.g. 'Group 120')
+          ├── EMOJI (gr) ← текстовая группа (shapes + fill текста)
+          ├── Fill XX     ← sibling fill = ЦВЕТ ТЕКСТА, выбранный автором
+          └── Transform
+
+    Sibling fill — это fill, который находится рядом с EMOJI группой
+    в родительской группе. Автор эмодзи подобрал его в зависимости от фона:
+    - Белый (lum > 0.5) → фон тёмный → белый текст
+    - Тёмный (lum <= 0.5) → фон светлый → тёмный текст
+
+    Возвращает [r, g, b, a] или None если sibling fill не найден.
+    """
+    target_ids = set(id(t) for t in targets)
+
+    def walk(obj, parent=None):
+        if isinstance(obj, dict):
+            if id(obj) in target_ids:
+                # Нашли текстовую группу! Смотрим siblings в parent
+                if parent is not None:
+                    items = parent.get("it", parent.get("shapes", []))
+                    if isinstance(items, list):
+                        for sib in items:
+                            if not isinstance(sib, dict):
+                                continue
+                            if id(sib) in target_ids:
+                                continue  # skip the target itself
+                            if sib.get("ty") == "fl":
+                                ck = sib.get("c", {}).get("k", [])
+                                if isinstance(ck, list) and len(ck) >= 3 and all(
+                                    isinstance(x, (int, float)) for x in ck[:3]
+                                ):
+                                    return [float(ck[0]), float(ck[1]), float(ck[2]), 1]
+                return None
+
+            for val in obj.values():
+                if isinstance(val, (dict, list)):
+                    r = walk(val, obj)
+                    if r is not None:
+                        return r
+        elif isinstance(obj, list):
+            for item in obj:
+                r = walk(item, parent)
+                if r is not None:
+                    return r
+        return None
+
+    return walk(lottie)
 
 def _extract_gradient_colors(obj):
     g = obj.get("g", {})
@@ -725,10 +691,16 @@ def _replace_textgroup(lottie, new_shapes, height=None):
     targets = _find_text_targets(lottie)
     if not targets:
         return False
-        
-    bounds = _get_textgroup_bounds(lottie)
-    if bounds and _has_white_overlapping_bg(lottie, targets, bounds):
-        fill_color = [0.05, 0.05, 0.05, 1]
+
+    # v0.2.9: определяем цвет текста через sibling fill в родительской группе
+    sibling_color = _get_sibling_fill_color(lottie, targets)
+    if sibling_color is not None:
+        # Sibling fill найден — используем его яркость
+        lum = 0.2126 * sibling_color[0] + 0.7152 * sibling_color[1] + 0.0722 * sibling_color[2]
+        if lum > 0.5:
+            fill_color = [1, 1, 1, 1]        # белый текст (фон тёмный)
+        else:
+            fill_color = [0.05, 0.05, 0.05, 1]  # тёмный текст (фон светлый)
     elif _is_lottie_light(lottie, targets):
         fill_color = [0.05, 0.05, 0.05, 1]
     else:
