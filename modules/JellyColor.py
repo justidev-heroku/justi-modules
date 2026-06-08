@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.3.8                     ║
+# ║                        🎨 JellyColor v4.3.9                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.3.8: кнопка Назад, кастомный масштаб и отмена генерации       ║
+# ║  v4.3.9: кнопка Назад, кастомный масштаб и отмена генерации       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,7 +31,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 3, 8)
+__version__ = (4, 3, 9)
 
 import asyncio
 import glob
@@ -161,7 +161,7 @@ TEMPLATE_PLACEHOLDER = "jelly"
 SESSION_TTL = 600
 CACHE_DIR = "/tmp/jelly_cache"
 MAX_TGS_SIZE = 63 * 1024
-RECOLOR_CONCURRENCY = 12
+RECOLOR_CONCURRENCY = 32
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -781,7 +781,7 @@ async def download_cached(client, doc) -> bytes:
 
 def compress_tgs(lottie: dict) -> bytes:
     raw = json_dumps(lottie)
-    compressed = gzip.compress(raw, compresslevel=6)
+    compressed = gzip.compress(raw, compresslevel=3)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
 
@@ -796,7 +796,7 @@ def compress_tgs(lottie: dict) -> bytes:
                 _strip_names(item)
     _strip_names(lottie)
     raw = json_dumps(lottie)
-    compressed = gzip.compress(raw, compresslevel=6)
+    compressed = gzip.compress(raw, compresslevel=3)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
 
@@ -812,7 +812,7 @@ def compress_tgs(lottie: dict) -> bytes:
         return obj
     _round_floats(lottie, 2)
     raw = json_dumps(lottie)
-    compressed = gzip.compress(raw, compresslevel=6)
+    compressed = gzip.compress(raw, compresslevel=3)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
 
@@ -1379,7 +1379,9 @@ def _recolor_document_sync(data: bytes, mime: str, hex_color: str, is_emoji: boo
         buf=io.BytesIO(compress_tgs(tint_lottie(lottie,hex_color))); buf.name="sticker.tgs"
     else:
         sz=100 if is_emoji else 512
-        img=Image.open(io.BytesIO(data)).convert("RGBA").resize((sz,sz),Image.LANCZOS)
+        img=Image.open(io.BytesIO(data)).convert("RGBA")
+        if img.size != (sz, sz):
+            img = img.resize((sz,sz),Image.LANCZOS)
         buf=io.BytesIO(); tint_image(img,hex_color).save(buf,format="WEBP",lossless=True)
         buf.seek(0); buf.name="sticker.webp"
     buf.seek(0)
@@ -1400,7 +1402,9 @@ def _recolor_document_gradient_sync(data: bytes, mime: str, gradient: dict, is_e
         buf=io.BytesIO(compress_tgs(lottie)); buf.name="sticker.tgs"
     else:
         sz=100 if is_emoji else 512
-        img=Image.open(io.BytesIO(data)).convert("RGBA").resize((sz,sz),Image.LANCZOS)
+        img=Image.open(io.BytesIO(data)).convert("RGBA")
+        if img.size != (sz, sz):
+            img = img.resize((sz,sz),Image.LANCZOS)
         buf=io.BytesIO()
         tint_image_gradient(img, gradient["colors"], gradient.get("dir", "d")).save(buf,format="WEBP",lossless=True)
         buf.seek(0); buf.name="sticker.webp"
@@ -1958,7 +1962,9 @@ class JellyColorMod(loader.Module):
                         buf=io.BytesIO(data); buf.name="sticker.tgs"
                     else:
                         sz=100 if _is_emoji else 512
-                        img=Image.open(io.BytesIO(data)).convert("RGBA").resize((sz,sz),Image.LANCZOS)
+                        img=Image.open(io.BytesIO(data)).convert("RGBA")
+                        if img.size != (sz, sz):
+                            img = img.resize((sz,sz),Image.LANCZOS)
                         buf=io.BytesIO(); img.save(buf,format="WEBP",lossless=True)
                         buf.seek(0); buf.name="sticker.webp"
                     buf.seek(0)
