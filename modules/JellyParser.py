@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.3.0                     ║
+# ║                        🔮 JellyParser v0.2.7                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║   v0.3.0: точный автоцвет с иерархическим разбором и global-fallback ║
+# ║     v0.2.7: аналитическая контрастность и поддержка групп-букв     ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -72,7 +72,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 9)
+__version__ = (0, 2, 7)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -171,93 +171,23 @@ def _ensure_font():
     return None
 
 
-def matrix_multiply(A, B):
-    return (
-        (A[0][0]*B[0][0] + A[0][1]*B[1][0], A[0][0]*B[0][1] + A[0][1]*B[1][1], A[0][0]*B[0][2] + A[0][1]*B[1][2] + A[0][2]),
-        (A[1][0]*B[0][0] + A[1][1]*B[1][0], A[1][0]*B[0][1] + A[1][1]*B[1][1], A[1][0]*B[0][2] + A[1][1]*B[1][2] + A[1][2]),
-        (0.0, 0.0, 1.0)
-    )
-
-def get_static_val(prop, default):
-    if not prop:
-        return default
-    k = prop.get("k", prop) if isinstance(prop, dict) else prop
-    if isinstance(k, list) and k:
-        if isinstance(k[0], dict):
-            val = k[0].get("s", default)
-        else:
-            val = k
-    else:
-        val = k
-    
-    if isinstance(default, list):
-        if isinstance(val, (int, float)):
-            return [val, val]
-        if isinstance(val, list) and len(val) >= len(default):
-            return [float(x) for x in val[:len(default)]]
-        return default
-    return float(val) if isinstance(val, (int, float)) else default
-
-def get_transform_matrix(tr):
-    if not tr:
-        return ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-        
-    p = get_static_val(tr.get("p"), [0.0, 0.0])
-    a = get_static_val(tr.get("a"), [0.0, 0.0])
-    s = get_static_val(tr.get("s"), [100.0, 100.0])
-    r = get_static_val(tr.get("r"), 0.0)
-    
-    # 1. Translate -anchor
-    M = ((1.0, 0.0, -a[0]), (0.0, 1.0, -a[1]), (0.0, 0.0, 1.0))
-    # 2. Scale
-    S = ((s[0]/100.0, 0.0, 0.0), (0.0, s[1]/100.0, 0.0), (0.0, 0.0, 1.0))
-    M = matrix_multiply(S, M)
-    # 3. Rotate
-    if r != 0.0:
-        rad = r * math.pi / 180.0
-        cos_r = math.cos(rad)
-        sin_r = math.sin(rad)
-        R = ((cos_r, -sin_r, 0.0), (sin_r, cos_r, 0.0), (0.0, 0.0, 1.0))
-        M = matrix_multiply(R, M)
-    # 4. Translate position
-    T = ((1.0, 0.0, p[0]), (0.0, 1.0, p[1]), (0.0, 0.0, 1.0))
-    M = matrix_multiply(T, M)
-    return M
-
-def _collect_path_verts(obj, current_matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))):
+def _collect_path_verts(obj):
     verts = []
-    
-    def _walk(o, curr_M):
+    def _walk(o):
         if isinstance(o, dict):
-            ty = o.get("ty")
-            next_M = curr_M
-            if ty == "gr" and "it" in o:
-                tr_item = next((x for x in o["it"] if isinstance(x, dict) and x.get("ty") == "tr"), None)
-                if tr_item:
-                    next_M = matrix_multiply(curr_M, get_transform_matrix(tr_item))
-            
-            if ty == "sh":
+            if o.get("ty") == "sh":
                 k = o.get("ks", {}).get("k", {})
                 if isinstance(k, list) and k and isinstance(k[0], dict):
                     k = k[0].get("s", k[0])
                 if isinstance(k, dict):
                     for v in k.get("v", []):
                         if isinstance(v, (list, tuple)) and len(v) >= 2:
-                            vx, vy = float(v[0]), float(v[1])
-                            gx = curr_M[0][0]*vx + curr_M[0][1]*vy + curr_M[0][2]
-                            gy = curr_M[1][0]*vx + curr_M[1][1]*vy + curr_M[1][2]
-                            verts.append((gx, gy))
-                            
-            for val in o.values():
-                if isinstance(val, (dict, list)):
-                    _walk(val, next_M)
+                            verts.append((float(v[0]), float(v[1])))
+            for val in o.values(): _walk(val)
         elif isinstance(o, list):
-            for item in o:
-                _walk(item, curr_M)
-                
-    _walk(obj, current_matrix)
+            for item in o: _walk(item)
+    _walk(obj)
     return verts
-
 
 
 def _verts_to_bounds(verts):
@@ -363,7 +293,7 @@ def _is_keyword_match(el):
         nm_lower = nm.lower()
         if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
             return True
-    return _has_keyword_child(el)
+    return False
 
 
 def _find_text_targets(lottie):
@@ -384,7 +314,7 @@ def _find_text_targets(lottie):
     if named_targets:
         final_targets = []
         for cand in named_targets:
-            if any(_is_descendant(t, cand) for t in named_targets if t is not cand):
+            if any(_is_descendant(cand, t) for t in named_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
@@ -403,7 +333,7 @@ def _find_text_targets(lottie):
     if fallback_targets:
         final_targets = []
         for cand in fallback_targets:
-            if any(_is_descendant(t, cand) for t in fallback_targets if t is not cand):
+            if any(_is_descendant(cand, t) for t in fallback_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
@@ -411,119 +341,21 @@ def _find_text_targets(lottie):
     return []
 
 
-def resolve_layer_matrices(layers, M_parent_context):
-    layer_map = {l["ind"]: l for l in layers if "ind" in l}
-    resolved = {}
-    
-    def get_accumulated_matrix(layer):
-        ind = layer.get("ind")
-        if ind in resolved:
-            return resolved[ind]
-            
-        M_local = get_transform_matrix(layer.get("ks"))
-        
-        parent_ind = layer.get("parent")
-        if parent_ind and parent_ind in layer_map:
-            M_parent = get_accumulated_matrix(layer_map[parent_ind])
-            M_accum = matrix_multiply(M_parent, M_local)
-        else:
-            M_accum = matrix_multiply(M_parent_context, M_local)
-            
-        resolved[ind] = M_accum
-        return M_accum
-
-    for layer in layers:
-        if "ind" in layer:
-            get_accumulated_matrix(layer)
-            
-    for layer in layers:
-        ind = layer.get("ind")
-        if ind not in resolved:
-            M_local = get_transform_matrix(layer.get("ks"))
-            resolved[id(layer)] = matrix_multiply(M_parent_context, M_local)
-        else:
-            resolved[id(layer)] = resolved[ind]
-            
-    return resolved
-
-
-def get_object_matrix(lottie, target_obj):
-    asset_map = {a["id"]: a.get("layers", []) for a in lottie.get("assets", []) if "id" in a}
-    found_matrix = [None]
-    
-    def traverse_layers(layers, M_parent_context):
-        if found_matrix[0] is not None:
-            return
-            
-        layer_matrices = resolve_layer_matrices(layers, M_parent_context)
-        
-        for layer in layers:
-            if found_matrix[0] is not None:
-                return
-                
-            M_layer = layer_matrices.get(layer.get("ind"), layer_matrices.get(id(layer)))
-            
-            if layer is target_obj:
-                found_matrix[0] = M_layer
-                return
-                
-            ty = layer.get("ty")
-            if ty == 0:
-                refId = layer.get("refId")
-                if refId in asset_map:
-                    traverse_layers(asset_map[refId], M_layer)
-            elif ty == 4:
-                def walk_shapes(obj, curr_M):
-                    if found_matrix[0] is not None:
-                        return
-                    if obj is target_obj:
-                        found_matrix[0] = curr_M
-                        return
-                        
-                    if isinstance(obj, dict):
-                        ty_obj = obj.get("ty")
-                        next_M = curr_M
-                        if ty_obj == "gr" and "it" in obj:
-                            tr_item = next((x for x in obj["it"] if isinstance(x, dict) and x.get("ty") == "tr"), None)
-                            if tr_item:
-                                next_M = matrix_multiply(curr_M, get_transform_matrix(tr_item))
-                                
-                        for v in obj.values():
-                            if isinstance(v, (dict, list)):
-                                walk_shapes(v, next_M)
-                    elif isinstance(obj, list):
-                        for item in obj:
-                            walk_shapes(item, curr_M)
-                            
-                for sh in layer.get("shapes", []):
-                    walk_shapes(sh, M_layer)
-                    
-    traverse_layers(lottie.get("layers", []), ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)))
-    return found_matrix[0] or ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-
-
-def find_target_matrix(lottie, target_obj):
-    return get_object_matrix(lottie, target_obj)
-
-
 def _get_textgroup_bounds(lottie):
     targets = _find_text_targets(lottie)
     if targets:
         target = targets[0]
-        M = get_object_matrix(lottie, target)
         if target.get("ty") == 5:
-            pos = get_static_val(target.get("ks", {}).get("p"), [0, 0])
-            cx = M[0][0]*pos[0] + M[0][1]*pos[1] + M[0][2]
-            cy = M[1][0]*pos[0] + M[1][1]*pos[1] + M[1][2]
+            pos = target.get("ks", {}).get("p", {}).get("k", [0, 0])
+            cx, cy = (pos[0], pos[1]) if (isinstance(pos, list) and len(pos) >= 2) else (0.0, 0.0)
             font_size = 50.0
             max_width = 512.0
             return (cx - max_width / 2.0, cy - font_size / 2.0, cx + max_width / 2.0, cy + font_size / 2.0)
             
-        verts = _collect_path_verts(target, M)
+        verts = _collect_path_verts(target)
         if verts:
             return _verts_to_bounds(verts)
     return None
-
 
 
 def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
@@ -685,127 +517,59 @@ def _extract_gradient_colors(obj):
     return []
 
 
-def traverse_lottie_bg(lottie, target_ids):
-    asset_map = {a["id"]: a.get("layers", []) for a in lottie.get("assets", []) if "id" in a}
-    background_shapes = []
-    
-    def traverse_layers(layers, M_parent_context, is_in_target=False):
-        layer_matrices = resolve_layer_matrices(layers, M_parent_context)
-        
-        for layer in layers:
-            M_layer = layer_matrices.get(layer.get("ind"), layer_matrices.get(id(layer)))
-            layer_in_target = is_in_target or (id(layer) in target_ids)
-            
-            ty = layer.get("ty")
-            if ty == 0:
-                refId = layer.get("refId")
-                if refId in asset_map:
-                    traverse_layers(asset_map[refId], M_layer, layer_in_target)
-            elif ty == 4:
-                if not layer_in_target:
-                    items = layer.get("shapes", [])
-                    direct_shapes = [x for x in items if isinstance(x, dict) and x.get("ty") == "sh"]
-                    direct_fills = [x for x in items if isinstance(x, dict) and x.get("ty") in ("fl", "gf", "gs")]
-                    if direct_shapes and direct_fills:
-                        background_shapes.append({
-                            "shapes": direct_shapes,
-                            "fills": direct_fills,
-                            "M": M_layer
-                        })
-                
-                def walk_shapes(obj, curr_M, in_target):
-                    if not isinstance(obj, dict): return
-                    
-                    obj_in_target = in_target or (id(obj) in target_ids)
-                    ty_obj = obj.get("ty")
-                    next_M = curr_M
-                    if ty_obj == "gr" and "it" in obj:
-                        tr_item = next((x for x in obj["it"] if isinstance(x, dict) and x.get("ty") == "tr"), None)
-                        if tr_item:
-                            next_M = matrix_multiply(curr_M, get_transform_matrix(tr_item))
-                        
-                        items = obj.get("it", [])
-                        if not obj_in_target:
-                            direct_shapes = [x for x in items if isinstance(x, dict) and x.get("ty") == "sh"]
-                            direct_fills = [x for x in items if isinstance(x, dict) and x.get("ty") in ("fl", "gf", "gs")]
-                            if direct_shapes and direct_fills:
-                                background_shapes.append({
-                                    "shapes": direct_shapes,
-                                    "fills": direct_fills,
-                                    "M": next_M
-                                })
-                                
-                        for item in items:
-                            walk_shapes(item, next_M, obj_in_target)
-                            
-                for sh in layer.get("shapes", []):
-                    walk_shapes(sh, M_layer, layer_in_target)
-                    
-    traverse_layers(lottie.get("layers", []), ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)))
-    return background_shapes
-
-
 def _analyze_background_luminance_analytical(lottie, targets, bounds):
     target_ids = set(id(t) for t in targets)
     
-    def get_intersection_area(sb, tb):
-        if not sb or not tb: return 0.0
-        ix1 = max(sb[0], tb[0])
-        iy1 = max(sb[1], tb[1])
-        ix2 = min(sb[2], tb[2])
-        iy2 = min(sb[3], tb[3])
-        w = ix2 - ix1
-        h = iy2 - iy1
-        return w * h if (w > 0 and h > 0) else 0.0
+    def overlaps(shape_bounds, text_bounds):
+        if not shape_bounds or not text_bounds:
+            return False
+        sx1, sy1, sx2, sy2 = shape_bounds
+        tx1, ty1, tx2, ty2 = text_bounds
+        return sx1 <= tx2 and sx2 >= tx1 and sy1 <= ty2 and sy2 >= ty1
 
-    bg_shapes = traverse_lottie_bg(lottie, target_ids)
-    
     overlapping_colors = []
-    global_colors = []
-    
-    for bg in bg_shapes:
-        verts = _collect_path_verts(bg["shapes"], bg["M"])
-        sb = _verts_to_bounds(verts)
-        if sb:
-            w = sb[2] - sb[0]
-            h = sb[3] - sb[1]
-            bg_area = w * h
-            
-            overlap_w = get_intersection_area(sb, bounds)
-            
-            for fill in bg["fills"]:
-                ity = fill.get("ty")
-                if ity == "fl":
-                    c_k = fill.get("c", {}).get("k", [])
-                    if isinstance(c_k, list) and len(c_k) >= 3:
-                        if all(isinstance(x, (int, float)) for x in c_k[:3]):
-                            if overlap_w > 0.0:
-                                overlapping_colors.append((c_k[0], c_k[1], c_k[2], overlap_w))
-                            global_colors.append((c_k[0], c_k[1], c_k[2], bg_area))
-                elif ity in ("gf", "gs"):
-                    gcs = _extract_gradient_colors(fill)
-                    for gc in gcs:
-                        if overlap_w > 0.0:
-                            overlapping_colors.append((gc[0], gc[1], gc[2], overlap_w))
-                        global_colors.append((gc[0], gc[1], gc[2], bg_area))
-                        
-    # Calculate global weighted luminance
-    global_lum_sum = sum((0.2126*r + 0.7152*g + 0.0722*b) * w for r, g, b, w in global_colors)
-    global_total_w = sum(w for r, g, b, w in global_colors)
-    global_lum = global_lum_sum / global_total_w if global_total_w > 0.0 else 0.0
-    
-    # Calculate local weighted luminance
-    local_lum_sum = sum((0.2126*r + 0.7152*g + 0.0722*b) * w for r, g, b, w in overlapping_colors)
-    local_total_w = sum(w for r, g, b, w in overlapping_colors)
-    local_lum = local_lum_sum / local_total_w if local_total_w > 0.0 else None
-    
-    if local_lum is not None:
-        final_lum = local_lum
-    else:
-        final_lum = global_lum
-        
-    return final_lum > 0.45
 
+    def walk(obj, is_in_target=False):
+        if not isinstance(obj, (dict, list)):
+            return
+        if isinstance(obj, dict):
+            if id(obj) in target_ids:
+                is_in_target = True
+            
+            if not is_in_target and (obj.get("ty") == "gr" or obj.get("ty") == 4):
+                items = obj.get("it", obj.get("shapes", []))
+                direct_shapes = [x for x in items if isinstance(x, dict) and x.get("ty") == "sh"]
+                direct_fills = [x for x in items if isinstance(x, dict) and x.get("ty") in ("fl", "gf", "gs")]
+                
+                if direct_shapes and direct_fills:
+                    verts = _collect_path_verts(direct_shapes)
+                    sb = _verts_to_bounds(verts)
+                    if overlaps(sb, bounds):
+                        for fill in direct_fills:
+                            ity = fill.get("ty")
+                            if ity == "fl":
+                                c_k = fill.get("c", {}).get("k", [])
+                                if isinstance(c_k, list) and len(c_k) >= 3:
+                                    if all(isinstance(x, (int, float)) for x in c_k[:3]):
+                                        overlapping_colors.append(c_k[:3])
+                            elif ity in ("gf", "gs"):
+                                gc = _extract_gradient_colors(fill)
+                                overlapping_colors.extend(gc)
+                                
+            for v in obj.values():
+                walk(v, is_in_target)
+        else:
+            for item in obj:
+                walk(item, is_in_target)
+
+    walk(lottie)
+    
+    if not overlapping_colors:
+        return False
+        
+    lums = [0.2126*r + 0.7152*g + 0.0722*b for r, g, b in overlapping_colors]
+    avg_lum = sum(lums) / len(lums)
+    return avg_lum > 0.45
 
 
 def _replace_textgroup(lottie, new_shapes, height=None, raw_data=None, bounds=None):
