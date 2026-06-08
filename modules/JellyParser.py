@@ -51,6 +51,12 @@ try:
 except ImportError:
     HAS_FONTTOOLS = False
 
+try:
+    import glaxnimate
+    HAS_GLAXNIMATE = True
+except Exception:
+    HAS_GLAXNIMATE = False
+
 logger = logging.getLogger("JellyParser")
 
 __version__ = (0, 1, 5)
@@ -711,7 +717,18 @@ class JellyParserMod(loader.Module):
                 return None
             try:
                 raw = await download_cached(self._client, doc)
-                lottie_obj = json.loads(gzip.decompress(raw).decode("utf-8"))
+                decompressed = gzip.decompress(raw)
+                
+                # Optional Glaxnimate verification
+                if HAS_GLAXNIMATE:
+                    try:
+                        with glaxnimate.environment.Headless():
+                            gdoc = glaxnimate.model.Document()
+                            glaxnimate.io.registry.from_extension("json").load(gdoc, decompressed)
+                    except Exception as ge:
+                        logger.warning(f"Glaxnimate verification failed for doc {i}: {ge}")
+
+                lottie_obj = json.loads(decompressed.decode("utf-8"))
                 bounds = _get_textgroup_bounds(lottie_obj)
                 if bounds:
                     return doc
