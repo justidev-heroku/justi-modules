@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.6                     ║
+# ║                        🔮 JellyParser v0.2.7                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║     v0.2.6: рендеринг-контрастность текста через python-lottie    ║
+# ║     v0.2.7: аналитическая контрастность и поддержка групп-букв     ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -72,7 +72,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 6)
+__version__ = (0, 2, 7)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -293,7 +293,7 @@ def _is_keyword_match(el):
         nm_lower = nm.lower()
         if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
             return True
-    return _has_keyword_child(el)
+    return False
 
 
 def _find_text_targets(lottie):
@@ -314,7 +314,7 @@ def _find_text_targets(lottie):
     if named_targets:
         final_targets = []
         for cand in named_targets:
-            if any(_is_descendant(t, cand) for t in named_targets if t is not cand):
+            if any(_is_descendant(cand, t) for t in named_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
@@ -333,7 +333,7 @@ def _find_text_targets(lottie):
     if fallback_targets:
         final_targets = []
         for cand in fallback_targets:
-            if any(_is_descendant(t, cand) for t in fallback_targets if t is not cand):
+            if any(_is_descendant(cand, t) for t in fallback_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
@@ -497,31 +497,79 @@ def _render_analyze_luminance(raw_data, bounds=None):
         return None
 
 
-def _is_lottie_light_fallback(lottie, text_targets):
-    """Fallback: analyze fill colors from JSON when render is unavailable."""
-    colors = []
-    def walk(o, is_in_target=False):
-        if not isinstance(o, (dict, list)):
+def _extract_gradient_colors(obj):
+    g = obj.get("g", {})
+    k_data = g.get("k", {})
+    flat = k_data.get("k", k_data) if isinstance(k_data, dict) else k_data
+    if isinstance(flat, list) and flat:
+        if isinstance(flat[0], dict):
+            flat = flat[0].get("s", [])
+        p = int(g.get("p", 0))
+        if p > 0 and len(flat) >= p * 4:
+            result = []
+            for i in range(p):
+                idx = i * 4
+                if idx + 3 < len(flat):
+                    r, g_val, b = flat[idx+1], flat[idx+2], flat[idx+3]
+                    if all(isinstance(x, (int, float)) for x in (r, g_val, b)):
+                        result.append([r, g_val, b])
+            return result
+    return []
+
+
+def _analyze_background_luminance_analytical(lottie, targets, bounds):
+    target_ids = set(id(t) for t in targets)
+    
+    def overlaps(shape_bounds, text_bounds):
+        if not shape_bounds or not text_bounds:
+            return False
+        sx1, sy1, sx2, sy2 = shape_bounds
+        tx1, ty1, tx2, ty2 = text_bounds
+        return sx1 <= tx2 and sx2 >= tx1 and sy1 <= ty2 and sy2 >= ty1
+
+    overlapping_colors = []
+
+    def walk(obj, is_in_target=False):
+        if not isinstance(obj, (dict, list)):
             return
-        if isinstance(o, dict):
-            if o in text_targets:
+        if isinstance(obj, dict):
+            if id(obj) in target_ids:
                 is_in_target = True
-            ty = o.get("ty")
-            if ty == "fl" and not is_in_target:
-                c_k = o.get("c", {}).get("k", [])
-                if isinstance(c_k, list) and len(c_k) >= 3:
-                    if all(isinstance(x, (int, float)) for x in c_k[:3]):
-                        colors.append(c_k[:3])
-            for v in o.values():
+            
+            if not is_in_target and (obj.get("ty") == "gr" or obj.get("ty") == 4):
+                items = obj.get("it", obj.get("shapes", []))
+                direct_shapes = [x for x in items if isinstance(x, dict) and x.get("ty") == "sh"]
+                direct_fills = [x for x in items if isinstance(x, dict) and x.get("ty") in ("fl", "gf", "gs")]
+                
+                if direct_shapes and direct_fills:
+                    verts = _collect_path_verts(direct_shapes)
+                    sb = _verts_to_bounds(verts)
+                    if overlaps(sb, bounds):
+                        for fill in direct_fills:
+                            ity = fill.get("ty")
+                            if ity == "fl":
+                                c_k = fill.get("c", {}).get("k", [])
+                                if isinstance(c_k, list) and len(c_k) >= 3:
+                                    if all(isinstance(x, (int, float)) for x in c_k[:3]):
+                                        overlapping_colors.append(c_k[:3])
+                            elif ity in ("gf", "gs"):
+                                gc = _extract_gradient_colors(fill)
+                                overlapping_colors.extend(gc)
+                                
+            for v in obj.values():
                 walk(v, is_in_target)
         else:
-            for item in o:
+            for item in obj:
                 walk(item, is_in_target)
+
     walk(lottie)
-    if not colors:
+    
+    if not overlapping_colors:
         return False
-    lums = [0.2126*r + 0.7152*g + 0.0722*b for r, g, b in colors]
-    return (sum(lums) / len(lums)) > 0.45
+        
+    lums = [0.2126*r + 0.7152*g + 0.0722*b for r, g, b in overlapping_colors]
+    avg_lum = sum(lums) / len(lums)
+    return avg_lum > 0.45
 
 
 def _replace_textgroup(lottie, new_shapes, height=None, raw_data=None, bounds=None):
@@ -529,17 +577,8 @@ def _replace_textgroup(lottie, new_shapes, height=None, raw_data=None, bounds=No
     if not targets:
         return False
 
-    # Primary: render-based luminance analysis (accurate)
-    is_light = None
-    if raw_data:
-        lum = _render_analyze_luminance(raw_data, bounds=bounds)
-        if lum is not None:
-            is_light = lum > 0.45
-            logger.debug(f"Render-based luminance: {lum:.3f}, is_light={is_light}")
-    # Fallback: JSON fill color analysis
-    if is_light is None:
-        is_light = _is_lottie_light_fallback(lottie, targets)
-        logger.debug(f"Fallback luminance analysis, is_light={is_light}")
+    is_light = _analyze_background_luminance_analytical(lottie, targets, bounds)
+    logger.debug(f"Analytical background luminance analysis is_light={is_light}")
 
     if is_light:
         fill_color = [0.05, 0.05, 0.05, 1]
