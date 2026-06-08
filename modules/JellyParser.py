@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.3                     ║
+# ║                        🔮 JellyParser v0.2.4                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║        v0.2.3: плоская Lottie структура и встроенная отладка      ║
+# ║        v0.2.4: плоская Lottie структура и встроенная отладка      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -59,7 +59,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 3)
+__version__ = (0, 2, 4)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -432,28 +432,76 @@ def _extract_styles(obj):
     return styles
 
 
+def _is_lottie_light(lottie, text_targets):
+    colors = []
+    
+    def walk(o, is_in_target=False):
+        if not isinstance(o, (dict, list)):
+            return
+        if isinstance(o, dict):
+            if o in text_targets:
+                is_in_target = True
+            
+            ty = o.get("ty")
+            if ty == "fl" and not is_in_target:
+                c_k = o.get("c", {}).get("k", [])
+                if isinstance(c_k, list) and len(c_k) >= 3:
+                    if all(isinstance(x, (int, float)) for x in c_k[:3]):
+                        colors.append(c_k[:3])
+            elif ty == "gf" and not is_in_target:
+                g_k = o.get("g", {}).get("k", [])
+                if isinstance(g_k, list) and len(g_k) >= 4:
+                    i = 0
+                    while i + 3 < len(g_k):
+                        if all(isinstance(x, (int, float)) for x in g_k[i:i+4]):
+                            colors.append(g_k[i+1:i+4])
+                        i += 4
+                        if i > 12:
+                            break
+            
+            for v in o.values():
+                walk(v, is_in_target)
+        else:
+            for item in o:
+                walk(item, is_in_target)
+                
+    walk(lottie)
+    if not colors:
+        return False
+        
+    lums = [0.2126*r + 0.7152*g + 0.0722*b for r, g, b in colors]
+    avg_lum = sum(lums) / len(lums)
+    return avg_lum > 0.45
+
+
 def _replace_textgroup(lottie, new_shapes, height=None):
     targets = _find_text_targets(lottie)
     if not targets:
         return False
         
+    is_light = _is_lottie_light(lottie, targets)
+    if is_light:
+        fill_color = [0.05, 0.05, 0.05, 1]
+        outline_color = [1, 1, 1, 1]
+    else:
+        fill_color = [1, 1, 1, 1]
+        outline_color = [0, 0, 0, 1]
+        
     for target in targets:
-        styles = _extract_styles(target)
-        if not styles:
-            styles = [{
-                "ty": "fl",
-                "c": {"a": 0, "k": [1, 1, 1, 1]},
-                "o": {"a": 0, "k": 100},
-                "r": 1,
-                "nm": "Fill 1"
-            }]
+        styles = [{
+            "ty": "fl",
+            "c": {"a": 0, "k": fill_color},
+            "o": {"a": 0, "k": 100},
+            "r": 1,
+            "nm": "Fill 1"
+        }]
             
         if height is not None:
             stroke_width = max(height * 0.08, 1.5)
             stroke_style = {
                 "ty": "st",
                 "nm": "TextOutline",
-                "c": {"a": 0, "k": [0, 0, 0, 1]},
+                "c": {"a": 0, "k": outline_color},
                 "o": {"a": 0, "k": 100},
                 "w": {"a": 0, "k": stroke_width},
                 "lc": 1,
