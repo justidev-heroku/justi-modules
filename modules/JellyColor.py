@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.3.6                     ║
+# ║                        🎨 JellyColor v4.3.7                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.3.6: кнопка Назад, кастомный масштаб и отмена генерации       ║
+# ║  v4.3.7: кнопка Назад, кастомный масштаб и отмена генерации       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,7 +31,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 3, 6)
+__version__ = (4, 3, 7)
 
 import asyncio
 import glob
@@ -1445,46 +1445,40 @@ async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, i
     )
 
 
-async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, exists_mode="recreate", retries=3):
-    for i in range(retries):
-        sn=short_name if i==0 else f"{short_name}_v{i+1}"
-        try:
-            await client(functions.stickers.CreateStickerSetRequest(
-                user_id=uid,title=title,short_name=sn,stickers=stickers,emojis=is_emoji,
-            ))
-            return sn,None
-        except Exception as e:
-            logger.exception(f"CreateStickerSetRequest failed for {sn}")
-            if "already exists" in str(e).lower() or "already_exists" in str(e).lower() or "short_name_occupied" in str(e).lower():
-                try:
-                    # Fetch current stickers in the set
-                    fs = await client(functions.messages.GetStickerSetRequest(
-                        stickerset=types.InputStickerSetShortName(short_name=sn), hash=0
+async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, exists_mode="recreate"):
+    try:
+        await client(functions.stickers.CreateStickerSetRequest(
+            user_id=uid, title=title, short_name=short_name, stickers=stickers, emojis=is_emoji,
+        ))
+        return short_name, None
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "already exists" in err_msg or "already_exists" in err_msg or "short_name_occupied" in err_msg:
+            # Пак уже существует. Пытаемся обновить/пересоздать его.
+            try:
+                fs = await client(functions.messages.GetStickerSetRequest(
+                    stickerset=types.InputStickerSetShortName(short_name=short_name), hash=0
+                ))
+                old_docs = fs.documents
+                
+                for sticker in stickers:
+                    await client(functions.stickers.AddStickerToSetRequest(
+                        stickerset=types.InputStickerSetShortName(short_name=short_name),
+                        sticker=sticker
                     ))
-                    old_docs = fs.documents
-                    
-                    # Add new stickers
-                    for sticker in stickers:
-                        await client(functions.stickers.AddStickerToSetRequest(
-                            stickerset=types.InputStickerSetShortName(short_name=sn),
-                            sticker=sticker
+                
+                if exists_mode == "recreate":
+                    for doc in old_docs:
+                        await client(functions.stickers.RemoveStickerFromSetRequest(
+                            sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
                         ))
-                    
-                    # Delete old stickers only if mode is recreate
-                    if exists_mode == "recreate":
-                        for doc in old_docs:
-                            await client(functions.stickers.RemoveStickerFromSetRequest(
-                                sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
-                            ))
-                    return sn,None
-                except Exception as add_err:
-                    logger.exception(f"Failed to add/remove stickers for existing set {sn}")
-                    if i < retries - 1:
-                        continue
-                    return None,str(add_err)
-            if "SHORT_NAME_OCCUPIED" in str(e) or "STICKERSET_INVALID" in str(e): continue
-            return None,str(e)
-    return None,"SHORT_NAME_OCCUPIED"
+                return short_name, None
+            except Exception as add_err:
+                logger.exception(f"Failed to update existing stickerpack {short_name}")
+                return None, f"Не удалось обновить существующий пак: {add_err}"
+        
+        logger.exception(f"CreateStickerSetRequest failed for {short_name}")
+        return None, str(e)
 
 
 # ─── Module ───────────────────────────────────────────────────────────────────
