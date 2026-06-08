@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.1.4                     ║
+# ║                        🔮 JellyParser v0.1.6                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║        v0.1.4: поддержка Shape Layer USERNAME-плейсхолдера       ║
+# ║        v0.1.6: улучшенный поиск shape слоев и стилей textGroup    ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -28,6 +28,8 @@
 #
 # meta developer: @justidev
 # requires: Pillow fonttools
+#
+# version bump: improved text targeting parser
 
 import asyncio
 import glob
@@ -59,7 +61,7 @@ except Exception:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 1, 5)
+__version__ = (0, 1, 6)
 
 PE = {
     "ok":      "5870633910337015697",

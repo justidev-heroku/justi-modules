@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.4.1                     ║
+# ║                        🎨 JellyColor v4.4.2                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.4.1: кнопка Назад, кастомный масштаб и отмена генерации       ║
+# ║  v4.4.2: кнопка Назад, улучшенный парсер и стили textGroup        ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -31,8 +31,10 @@
 # requires: Pillow fonttools orjson
 #
 # modification: JellyColor manual scale adjustment and preview feature
+#
+# version bump: improved text targeting parser
 
-__version__ = (4, 4, 1)
+__version__ = (4, 4, 2)
 
 import asyncio
 import glob
