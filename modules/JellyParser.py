@@ -53,7 +53,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 1, 4)
+__version__ = (0, 1, 5)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -177,56 +177,174 @@ def _verts_to_bounds(verts):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def _count_paths(obj):
+    cnt = 0
+    def _collect(o):
+        nonlocal cnt
+        if isinstance(o, dict):
+            if o.get("ty") == "sh":
+                cnt += 1
+            for val in o.values(): _collect(val)
+        elif isinstance(o, list):
+            for item in o: _collect(item)
+    _collect(obj)
+    return cnt
+
+
+def _has_fill(obj):
+    found = False
+    def _collect(o):
+        nonlocal found
+        if isinstance(o, dict):
+            if o.get("ty") == "fl":
+                found = True
+                return
+            for val in o.values(): _collect(val)
+        elif isinstance(o, list):
+            for item in o: _collect(item)
+    _collect(obj)
+    return found
+
+
+def _get_all_elements(lottie):
+    def _walk_layer(layer):
+        yield layer
+        if "shapes" in layer:
+            for s in layer["shapes"]:
+                yield from _walk_shape(s)
+        if "it" in layer:
+            for s in layer["it"]:
+                yield from _walk_shape(s)
+
+    def _walk_shape(shape):
+        yield shape
+        if "it" in shape:
+            for s in shape["it"]:
+                yield from _walk_shape(s)
+        if "shapes" in shape:
+            for s in shape["shapes"]:
+                yield from _walk_shape(s)
+
+    if "layers" in lottie:
+        for l in lottie["layers"]:
+            yield from _walk_layer(l)
+            
+    if "assets" in lottie:
+        for a in lottie["assets"]:
+            if "layers" in a:
+                for l in a["layers"]:
+                    yield from _walk_layer(l)
+
+
+def _is_descendant(child, parent):
+    found = False
+    def _check(o):
+        nonlocal found
+        if found: return
+        if isinstance(o, dict):
+            if o is child:
+                found = True
+                return
+            for val in o.values(): _check(val)
+        elif isinstance(o, list):
+            for item in o: _check(item)
+    if "shapes" in parent:
+        for s in parent["shapes"]: _check(s)
+    if "it" in parent:
+        for s in parent["it"]: _check(s)
+    return found
+
+
+def _has_keyword_child(obj):
+    keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"]
+    found = False
+    def _check(o):
+        nonlocal found
+        if found: return
+        if isinstance(o, dict):
+            nm = o.get("nm")
+            if isinstance(nm, str) and nm:
+                nm_lower = nm.lower()
+                if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
+                    found = True
+                    return
+            for val in o.values(): _check(val)
+        elif isinstance(o, list):
+            for item in o: _check(item)
+    if isinstance(obj, dict):
+        for val in obj.values(): _check(val)
+    return found
+
+
+def _is_keyword_match(el):
+    keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"]
+    nm = el.get("nm")
+    if isinstance(nm, str) and nm:
+        nm_lower = nm.lower()
+        if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
+            return True
+    return _has_keyword_child(el)
+
+
+def _find_text_targets(lottie):
+    elements = list(_get_all_elements(lottie))
+    
+    text_layers = [el for el in elements if el.get("ty") == 5]
+    if text_layers:
+        return text_layers
+
+    named_targets = []
+    for el in elements:
+        ty = el.get("ty")
+        if ty == 4 or ty == "gr":
+            if _is_keyword_match(el):
+                if _count_paths(el) >= 1 and _has_fill(el):
+                    named_targets.append(el)
+                        
+    if named_targets:
+        final_targets = []
+        for cand in named_targets:
+            if any(_is_descendant(cand, t) for t in named_targets if t is not cand):
+                continue
+            final_targets.append(cand)
+        return final_targets
+
+    fallback_targets = []
+    for el in elements:
+        ty = el.get("ty")
+        if ty == "gr":
+            nm = el.get("nm")
+            nm_lower = (nm.lower() if isinstance(nm, str) else "")
+            if "user" not in nm_lower:
+                cnsh = _count_paths(el)
+                if 2 <= cnsh <= 15 and _has_fill(el):
+                    fallback_targets.append(el)
+                    
+    if fallback_targets:
+        final_targets = []
+        for cand in fallback_targets:
+            if any(_is_descendant(cand, t) for t in fallback_targets if t is not cand):
+                continue
+            final_targets.append(cand)
+        return final_targets
+
+    return []
+
+
 def _get_textgroup_bounds(lottie):
-    def find_named(obj):
-        if isinstance(obj, dict):
-            if obj.get("ty") == "gr":
-                nm = obj.get("nm", "")
-                if isinstance(nm, str) and nm:
-                    nm_lower = nm.lower()
-                    if "user" not in nm_lower and "text" in nm_lower:
-                        b = _verts_to_bounds(_collect_path_verts(obj))
-                        if b:
-                            return b
-            for v in obj.values():
-                r = find_named(v)
-                if r:
-                    return r
-        elif isinstance(obj, list):
-            for item in obj:
-                r = find_named(item)
-                if r:
-                    return r
-        return None
-    b = find_named(lottie)
-    if b:
-        return b
-
-    def find_text_layer(layers):
-        for layer in layers:
-            if layer.get("ty") != 4:
-                continue
-            nm = layer.get("nm", "")
-            shapes = layer.get("shapes", [])
-            if not isinstance(nm, str):
-                continue
-            nm_lower = nm.lower()
-            if "user" in nm_lower:
-                continue
-            n_sh = sum(1 for s in shapes if s.get("ty") == "sh")
-            has_fl = any(s.get("ty") == "fl" for s in shapes)
-            if "text" in nm_lower and n_sh >= 2 and has_fl:
-                b = _verts_to_bounds(_collect_path_verts({"shapes": shapes}))
-                if b:
-                    return b
-        return None
-
-    all_ll = [lottie.get("layers", [])] + [a.get("layers", []) for a in lottie.get("assets", [])]
-    for ll in all_ll:
-        b = find_text_layer(ll)
-        if b:
-            return b
-
+    targets = _find_text_targets(lottie)
+    if targets:
+        target = targets[0]
+        if target.get("ty") == 5:
+            pos = target.get("ks", {}).get("p", {}).get("k", [0, 0])
+            cx, cy = (pos[0], pos[1]) if (isinstance(pos, list) and len(pos) >= 2) else (0.0, 0.0)
+            font_size = 50.0
+            max_width = 512.0
+            return (cx - max_width / 2.0, cy - font_size / 2.0, cx + max_width / 2.0, cy + font_size / 2.0)
+            
+        verts = _collect_path_verts(target)
+        if verts:
+            return _verts_to_bounds(verts)
     return None
 
 
@@ -295,8 +413,10 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
 
 
 def _replace_textgroup(lottie, new_shapes):
-    patched_any = False
-    
+    targets = _find_text_targets(lottie)
+    if not targets:
+        return False
+        
     def _hfl(items): return any(x.get("ty")=="fl" for x in items)
     
     def _islc(item):
@@ -304,61 +424,19 @@ def _replace_textgroup(lottie, new_shapes):
         return not _hfl(item.get("it",[])) and not any(x.get("ty")=="st" for x in item.get("it",[]))
         
     def _patch(lst):
-        nonlocal patched_any
-        style=[x for x in lst if x.get("ty") not in ("sh","el","rc","sr") and not _islc(x)]
-        lst[:]=new_shapes+style
-        patched_any = True
+        style = [x for x in lst if x.get("ty") not in ("sh", "el", "rc", "sr") and not _islc(x)]
+        lst[:] = new_shapes + style
 
-    # 1. Try to find by explicit names containing "text" (excluding username)
-    matched_named = []
-    def walk_named(obj, path=()):
-        if isinstance(obj, dict):
-            nm = obj.get("nm", "")
-            if isinstance(nm, str) and nm:
-                nm_lower = nm.lower()
-                if "user" not in nm_lower and "text" in nm_lower:
-                    if obj.get("ty") == "gr":
-                        matched_named.append((obj, path))
-            for k, v in obj.items():
-                walk_named(v, path + (k,))
-        elif isinstance(obj, list):
-            for i, x in enumerate(obj):
-                walk_named(x, path + (i,))
-
-    walk_named(lottie)
-    if matched_named:
-        filtered = []
-        for gr1, p1 in matched_named:
-            is_ancestor = False
-            for gr2, p2 in matched_named:
-                if len(p1) < len(p2) and p2[:len(p1)] == p1:
-                    is_ancestor = True
-                    break
-            if not is_ancestor:
-                filtered.append(gr1)
-        for gr in filtered:
-            _patch(gr.setdefault("it", []))
+    for target in targets:
+        if "it" in target:
+            _patch(target.setdefault("it", []))
+        elif "shapes" in target:
+            _patch(target.setdefault("shapes", []))
+        else:
+            key = "shapes" if target.get("ty") == 4 else "it"
+            _patch(target.setdefault(key, []))
             
-    if patched_any:
-        return True
-
-    # 2. Try to find by shape layers containing "text" in name
-    def try_ll(layers):
-        for layer in layers:
-            if layer.get("ty")!=4: continue
-            shapes=layer.get("shapes",[]); nm=layer.get("nm","")
-            if not isinstance(nm, str): continue
-            nm_lower = nm.lower()
-            if "user" in nm_lower: continue
-            n=sum(1 for s in shapes if s.get("ty")=="sh")
-            fl=any(s.get("ty")=="fl" for s in shapes)
-            if "text" in nm_lower and n>=2 and fl:
-                _patch(shapes)
-
-    for ll in [lottie.get("layers",[])]+[a.get("layers",[]) for a in lottie.get("assets",[])]:  
-        try_ll(ll)
-
-    return patched_any
+    return True
 
 
 def _find_username_bounds(lottie):
