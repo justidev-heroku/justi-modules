@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.4.1                     ║
+# ║                        🎨 JellyColor v4.4.2                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.4.1: кнопка Назад, кастомный масштаб и отмена генерации       ║
+# ║  v4.4.2: эксклюзивные 2 пак, авто-разделение паков > 200 эмодзи   ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 4, 1)
+__version__ = (4, 4, 2)
 
 import asyncio
 import glob
@@ -154,6 +154,7 @@ TEMPLATE_SETS = [
     {"title": "🎨 Цветные", "short_name": "mainemoji_jellycolor4_by_justidev"},
     {"title": "🗂 Паспорт", "short_name": "mainemoji_jellycolor9_by_justidev"},
     {"title": "✨ Эксклюзивные", "short_name": "mainemoji_jellycolor10_by_justidev"},
+    {"title": "✨ Эксклюзивные 2", "short_name": "mainemoji_jellycolor36_by_justidev"},
     {"title": "📦 All in All", "short_name": "mainemoji_jellycolor14_by_justidev"},
 ]
 
@@ -1450,45 +1451,62 @@ async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, i
     )
 
 
+def _get_partition_short_name(short_name: str, n: int) -> str:
+    if n <= 1:
+        return short_name
+    if "_by_" in short_name.lower():
+        parts = short_name.rsplit("_by_", 1)
+        return f"{parts[0]}_v{n}_by_{parts[1]}"
+    return f"{short_name}_v{n}"
+
+
 async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, exists_mode="recreate"):
-    try:
-        await client(functions.stickers.CreateStickerSetRequest(
-            user_id=uid, title=title, short_name=short_name, stickers=stickers, emojis=is_emoji,
-        ))
-        return short_name, None
-    except Exception as e:
-        err_msg = str(e).lower()
-        if "already exists" in err_msg or "already_exists" in err_msg or "short_name_occupied" in err_msg:
-            if exists_mode == "recreate":
-                # Режим перезаписи: удаляем старый пак целиком и создаем новый за один шаг
-                # Это работает в ~150 раз быстрее, чем удаление и добавление по одному стикеру
-                try:
-                    await client(functions.stickers.DeleteStickerSetRequest(
-                        stickerset=types.InputStickerSetShortName(short_name=short_name)
-                    ))
-                    await asyncio.sleep(0.5)  # даем серверам Telegram освободить имя
-                    await client(functions.stickers.CreateStickerSetRequest(
-                        user_id=uid, title=title, short_name=short_name, stickers=stickers, emojis=is_emoji,
-                    ))
-                    return short_name, None
-                except Exception as del_err:
-                    logger.exception(f"Failed to recreate stickerpack via delete {short_name}")
-                    return None, f"Не удалось перезаписать пак: {del_err}"
-            else:
-                # Режим добавления: дописываем новые стикеры в конец пака
-                try:
-                    for sticker in stickers:
-                        await client(functions.stickers.AddStickerToSetRequest(
-                            stickerset=types.InputStickerSetShortName(short_name=short_name),
-                            sticker=sticker
-                        ))
-                    return short_name, None
-                except Exception as add_err:
-                    logger.exception(f"Failed to append stickers to existing stickerpack {short_name}")
-                    return None, f"Не удалось добавить стикеры в пак: {add_err}"
+    limit = 200 if is_emoji else 120
+    chunks = [stickers[i:i + limit] for i in range(0, len(stickers), limit)]
+    created_names = []
+
+    for idx, chunk in enumerate(chunks):
+        n = idx + 1
+        curr_short = _get_partition_short_name(short_name, n)
+        curr_title = title if n == 1 else f"{title} v{n}"
         
-        logger.exception(f"CreateStickerSetRequest failed for {short_name}")
-        return None, str(e)
+        try:
+            await client(functions.stickers.CreateStickerSetRequest(
+                user_id=uid, title=curr_title, short_name=curr_short, stickers=chunk, emojis=is_emoji,
+            ))
+            created_names.append(curr_short)
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "already exists" in err_msg or "already_exists" in err_msg or "short_name_occupied" in err_msg:
+                if exists_mode == "recreate":
+                    try:
+                        await client(functions.stickers.DeleteStickerSetRequest(
+                            stickerset=types.InputStickerSetShortName(short_name=curr_short)
+                        ))
+                        await asyncio.sleep(0.5)
+                        await client(functions.stickers.CreateStickerSetRequest(
+                            user_id=uid, title=curr_title, short_name=curr_short, stickers=chunk, emojis=is_emoji,
+                        ))
+                        created_names.append(curr_short)
+                    except Exception as del_err:
+                        logger.exception(f"Failed to recreate stickerpack via delete {curr_short}")
+                        return None, f"Не удалось перезаписать пак {curr_short}: {del_err}"
+                else:
+                    try:
+                        for sticker in chunk:
+                            await client(functions.stickers.AddStickerToSetRequest(
+                                stickerset=types.InputStickerSetShortName(short_name=curr_short),
+                                sticker=sticker
+                            ))
+                        created_names.append(curr_short)
+                    except Exception as add_err:
+                        logger.exception(f"Failed to append stickers to existing stickerpack {curr_short}")
+                        return None, f"Не удалось добавить стикеры в пак {curr_short}: {add_err}"
+            else:
+                logger.exception(f"CreateStickerSetRequest failed for {curr_short}")
+                return None, str(e)
+                
+    return created_names, None
 
 
 # ─── Module ───────────────────────────────────────────────────────────────────
@@ -1992,11 +2010,15 @@ class JellyColorMod(loader.Module):
             title=s.get("pack_title") or "JellyColor "+clabel
             fn,err=await _safe_create_set(self._client,me.id,title,pname,ordered,ptype=="emoji",exists_mode=s.get("exists_mode","recreate"))
             if err: raise ValueError(err)
-            link="https://t.me/"+("addemoji/" if ptype=="emoji" else "addstickers/")+fn
+            
+            links = ["https://t.me/" + ("addemoji/" if ptype=="emoji" else "addstickers/") + name for name in fn]
+            main_link = links[0]
+            links_text = "\n".join([f"• <a href=\"{l}\">{l}</a>" for l in links])
             
             stats=self.db.get("JellyColor","stats",[])
             clabel=gradient["name"] if gradient else (color or "без перекраски")
-            stats.append({"name":fn,"link":link,"color":clabel,"count":len(ordered),"type":ptype,"ts":int(time.time())})
+            for name, link in zip(fn, links):
+                stats.append({"name":name,"link":link,"color":clabel,"count":len(ordered),"type":ptype,"ts":int(time.time())})
             self.db.set("JellyColor","stats",stats)
             tl="Стикерпак" if ptype=="sticker" else "Эмодзи-пак"
             tag=f"<code>{clabel}</code>"
@@ -2004,8 +2026,8 @@ class JellyColorMod(loader.Module):
                 text=(pe("✅",PE["ok"])+" <b>Готово!</b>\n\n"
                       +pe("🖤",PE["brush"])+f" {tl} → {tag}\n"
                       +pe("📦",PE["pack"])+f" <b>{len(ordered)}</b> шт.\n\n"
-                      +pe("🔗",PE["link"])+f" <a href=\"{link}\">{link}</a>"),
-                reply_markup=[[{"text":"Открыть","icon_custom_emoji_id":PE["link"],"emoji_id":PE["link"],"style":"success","url":link}]],
+                      +pe("🔗",PE["link"])+f" <b>Ссылки на паки:</b>\n{links_text}"),
+                reply_markup=[[{"text":"Открыть","icon_custom_emoji_id":PE["link"],"emoji_id":PE["link"],"style":"success","url":main_link}]],
             )
             self._sessions.pop(uid,None)
         except asyncio.CancelledError:
@@ -2058,7 +2080,8 @@ class JellyColorMod(loader.Module):
             sn="jc"+hc[1:].lower()+"_by_"+(me.username or "userbot")
             final_name,err=await _safe_create_set(self._client,me.id,"JellyColor "+hc,sn,[item],is_emoji)
             if err: raise ValueError(err)
-            link="https://t.me/"+("addemoji/" if is_emoji else "addstickers/")+final_name
+            final_name_str = final_name[0] if isinstance(final_name, list) else final_name
+            link="https://t.me/"+("addemoji/" if is_emoji else "addstickers/")+final_name_str
             await msg.edit(pe("✅",PE["ok"])+f" Готово!\n\n"+pe("🔗",PE["link"])+f" <a href=\"{link}\">{link}</a>")
         except Exception as e:
             await msg.edit(pe("❌",PE["err"])+" <code>"+str(e)+"</code>")
@@ -2570,18 +2593,22 @@ class JellyColorMod(loader.Module):
             pack_title=s.get("pack_title") or txt+" Emoji Pack"
             fn,err=await _safe_create_set(self._client,me.id,pack_title,pname,ordered,True,exists_mode=s.get("exists_mode","recreate"))
             if err: raise ValueError(err)
-            link="https://t.me/addemoji/"+fn
+            
+            links = ["https://t.me/addemoji/" + name for name in fn]
+            main_link = links[0]
+            links_text = "\n".join([f"• <a href=\"{l}\">{l}</a>" for l in links])
             
             stats=self.db.get("JellyColor","stats",[])
-            stats.append({"name":fn,"link":link,"color":color or "text","count":len(ordered),"type":"emoji","ts":int(time.time())})
+            for name, link in zip(fn, links):
+                stats.append({"name":name,"link":link,"color":color or "text","count":len(ordered),"type":"emoji","ts":int(time.time())})
             self.db.set("JellyColor","stats",stats)
             await call.edit(
                 text=(pe("✅",PE["ok"])+" <b>Готово!</b>\n\n"
                       +pe("✍️",PE["write"])+f" Текст: <code>{txt}</code>\n"
                       +pe("🎨",PE["palette"])+f" Цвет: <code>{color_label}</code>\n"
                       +pe("📦",PE["pack"])+f" <b>{len(ordered)}</b> шт.\n\n"
-                      +pe("🔗",PE["link"])+f" <a href=\"{link}\">{link}</a>"),
-                reply_markup=[[{"text":"Открыть","icon_custom_emoji_id":PE["link"],"emoji_id":PE["link"],"style":"success","url":link}]],
+                      +pe("🔗",PE["link"])+f" <b>Ссылки на паки:</b>\n{links_text}"),
+                reply_markup=[[{"text":"Открыть","icon_custom_emoji_id":PE["link"],"emoji_id":PE["link"],"style":"success","url":main_link}]],
             )
             self._tsessions.pop(uid,None)
         except asyncio.CancelledError:

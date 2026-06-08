@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.3.1                     ║
+# ║                        🔮 JellyParser v0.3.2                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.3.1: Поддержка native text layers (ty=5) и лимит TGS 60 KB    ║
+# ║ v0.3.2: Авто-разделение паков > 200 эмодзи                        ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -60,7 +60,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 3, 1)
+__version__ = (0, 3, 2)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -934,40 +934,76 @@ async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, i
     )
 
 
-async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, retries=3):
-    for i in range(retries):
-        sn=short_name if i==0 else f"{short_name}_v{i+1}"
-        try:
-            await client(functions.stickers.CreateStickerSetRequest(
-                user_id=uid,title=title,short_name=sn,stickers=stickers,emojis=is_emoji,
-            ))
-            return sn,None
-        except Exception as e:
-            if "already exists" in str(e).lower() or "already_exists" in str(e).lower():
-                try:
-                    fs = await client(functions.messages.GetStickerSetRequest(
-                        stickerset=types.InputStickerSetShortName(short_name=sn), hash=0
-                    ))
-                    old_docs = fs.documents
-                    
-                    for sticker in stickers:
-                        await client(functions.stickers.AddStickerToSetRequest(
-                            stickerset=types.InputStickerSetShortName(short_name=sn),
-                            sticker=sticker
+def _get_partition_short_name(short_name: str, n: int) -> str:
+    if n <= 1:
+        return short_name
+    if "_by_" in short_name.lower():
+        parts = short_name.rsplit("_by_", 1)
+        return f"{parts[0]}_v{n}_by_{parts[1]}"
+    return f"{short_name}_v{n}"
+
+
+async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji):
+    limit = 200 if is_emoji else 120
+    chunks = [stickers[i:i + limit] for i in range(0, len(stickers), limit)]
+    created_names = []
+
+    for idx, chunk in enumerate(chunks):
+        n = idx + 1
+        curr_short = _get_partition_short_name(short_name, n)
+        curr_title = title if n == 1 else f"{title} v{n}"
+        
+        success = False
+        for fallback_idx in range(3):
+            if fallback_idx > 0:
+                if "_by_" in curr_short.lower():
+                    parts = curr_short.rsplit("_by_", 1)
+                    sn_to_try = f"{parts[0]}_f{fallback_idx}_by_{parts[1]}"
+                else:
+                    sn_to_try = f"{curr_short}_f{fallback_idx}"
+            else:
+                sn_to_try = curr_short
+
+            try:
+                await client(functions.stickers.CreateStickerSetRequest(
+                    user_id=uid, title=curr_title, short_name=sn_to_try, stickers=chunk, emojis=is_emoji,
+                ))
+                created_names.append(sn_to_try)
+                success = True
+                break
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "already exists" in err_msg or "already_exists" in err_msg:
+                    try:
+                        fs = await client(functions.messages.GetStickerSetRequest(
+                            stickerset=types.InputStickerSetShortName(short_name=sn_to_try), hash=0
                         ))
-                    
-                    for doc in old_docs:
-                        await client(functions.stickers.RemoveStickerFromSetRequest(
-                            sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
-                        ))
-                    return sn,None
-                except Exception as add_err:
-                    if i < retries - 1:
-                        continue
-                    return None,str(add_err)
-            if "SHORT_NAME_OCCUPIED" in str(e) or "STICKERSET_INVALID" in str(e): continue
-            return None,str(e)
-    return None,"SHORT_NAME_OCCUPIED"
+                        old_docs = fs.documents
+                        
+                        for sticker in chunk:
+                            await client(functions.stickers.AddStickerToSetRequest(
+                                stickerset=types.InputStickerSetShortName(short_name=sn_to_try),
+                                sticker=sticker
+                            ))
+                        
+                        for doc in old_docs:
+                            await client(functions.stickers.RemoveStickerFromSetRequest(
+                                sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
+                            ))
+                        created_names.append(sn_to_try)
+                        success = True
+                        break
+                    except Exception as add_err:
+                        if fallback_idx == 2:
+                            return None, f"Не удалось перезаписать пак {sn_to_try}: {add_err}"
+                elif "short_name_occupied" in err_msg or "stickerset_invalid" in err_msg:
+                    continue
+                else:
+                    return None, f"Ошибка при создании пака {sn_to_try}: {e}"
+        if not success:
+            return None, f"Имя занято для пака {curr_short}"
+            
+    return created_names, None
 
 
 @loader.tds
@@ -1180,11 +1216,12 @@ class JellyParserMod(loader.Module):
             if err:
                 raise ValueError(err)
             
-            link = f"https://t.me/addemoji/{final_name}"
+            links = [f"https://t.me/addemoji/{name}" for name in final_name]
+            links_text = "\n".join([f"• <a href=\"{l}\">{l}</a>" for l in links])
             await status_msg.edit(
                 pe("✅", PE["ok"]) + f" <b>Пак успешно создан!</b>\n\n"
                 + pe("📦", PE["pack"]) + f" Всего добавлено: <b>{len(uploaded_items)}</b> шт.\n"
-                + pe("🔗", PE["link"]) + f" <a href=\"{link}\">{link}</a>",
+                + pe("🔗", PE["link"]) + f" <b>Ссылки на паки:</b>\n{links_text}",
                 parse_mode="HTML"
             )
         except Exception as e:
