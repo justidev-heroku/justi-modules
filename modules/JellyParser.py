@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.7                     ║
+# ║                        🔮 JellyParser v0.2.5                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║     v0.2.7: аналитическая контрастность и поддержка групп-букв     ║
+# ║        v0.2.5: плоская Lottie структура и встроенная отладка      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -27,7 +27,7 @@
 # SOFTWARE.
 #
 # meta developer: @justidev
-# requires: Pillow fonttools lottie
+# requires: Pillow fonttools
 
 import asyncio
 import glob
@@ -57,22 +57,9 @@ try:
 except ImportError:
     HAS_FONTTOOLS = False
 
-try:
-    from lottie.parsers.tgs import parse_tgs
-    from lottie.exporters.cairo import export_png as _lottie_export_png
-    HAS_LOTTIE_RENDER = True
-except ImportError:
-    HAS_LOTTIE_RENDER = False
-
-try:
-    from PIL import Image as _PILImage
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
-
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 7)
+__version__ = (0, 2, 5)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -293,7 +280,7 @@ def _is_keyword_match(el):
         nm_lower = nm.lower()
         if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
             return True
-    return False
+    return _has_keyword_child(el)
 
 
 def _find_text_targets(lottie):
@@ -314,7 +301,7 @@ def _find_text_targets(lottie):
     if named_targets:
         final_targets = []
         for cand in named_targets:
-            if any(_is_descendant(cand, t) for t in named_targets if t is not cand):
+            if any(_is_descendant(t, cand) for t in named_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
@@ -333,7 +320,7 @@ def _find_text_targets(lottie):
     if fallback_targets:
         final_targets = []
         for cand in fallback_targets:
-            if any(_is_descendant(cand, t) for t in fallback_targets if t is not cand):
+            if any(_is_descendant(t, cand) for t in fallback_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
@@ -445,141 +432,54 @@ def _extract_styles(obj):
     return styles
 
 
-def _render_analyze_luminance(raw_data, bounds=None):
-    """Render lottie to PNG via python-lottie and analyze pixel luminance
-    in the text region. Returns luminance 0.0-1.0 or None on failure."""
-    if not (HAS_LOTTIE_RENDER and HAS_PIL):
-        return None
-    try:
-        buf = io.BytesIO(raw_data)
-        anim = parse_tgs(buf)
-        png_buf = io.BytesIO()
-        _lottie_export_png(anim, png_buf, frame=0)
-        png_buf.seek(0)
-        img = _PILImage.open(png_buf).convert("RGBA")
-        w, h = img.size
-        anim_w = anim.width or 512
-        anim_h = anim.height or 512
-
-        if bounds:
-            bx1, by1, bx2, by2 = bounds
-            sx, sy = w / anim_w, h / anim_h
-            pad_x = int(abs(bx2 - bx1) * sx * 0.35)
-            pad_y = int(abs(by2 - by1) * sy * 0.35)
-            px1 = max(0, int(bx1 * sx) - pad_x)
-            py1 = max(0, int(by1 * sy) - pad_y)
-            px2 = min(w, int(bx2 * sx) + pad_x)
-            py2 = min(h, int(by2 * sy) + pad_y)
-        else:
-            px1, py1 = int(w * 0.15), int(h * 0.15)
-            px2, py2 = int(w * 0.85), int(h * 0.85)
-
-        region_w = max(px2 - px1, 1)
-        region_h = max(py2 - py1, 1)
-        step = max(1, min(region_w, region_h) // 25)
-        pixels = []
-        for x in range(px1, px2, step):
-            for y in range(py1, py2, step):
-                r, g, b, a = img.getpixel((x, y))
-                if a > 30:
-                    pixels.append((r, g, b))
-
-        if not pixels:
-            return None
-
-        avg_r = sum(p[0] for p in pixels) / len(pixels)
-        avg_g = sum(p[1] for p in pixels) / len(pixels)
-        avg_b = sum(p[2] for p in pixels) / len(pixels)
-        lum = (0.2126 * avg_r + 0.7152 * avg_g + 0.0722 * avg_b) / 255.0
-        return lum
-    except Exception as e:
-        logger.debug(f"_render_analyze_luminance failed: {e}")
-        return None
-
-
-def _extract_gradient_colors(obj):
-    g = obj.get("g", {})
-    k_data = g.get("k", {})
-    flat = k_data.get("k", k_data) if isinstance(k_data, dict) else k_data
-    if isinstance(flat, list) and flat:
-        if isinstance(flat[0], dict):
-            flat = flat[0].get("s", [])
-        p = int(g.get("p", 0))
-        if p > 0 and len(flat) >= p * 4:
-            result = []
-            for i in range(p):
-                idx = i * 4
-                if idx + 3 < len(flat):
-                    r, g_val, b = flat[idx+1], flat[idx+2], flat[idx+3]
-                    if all(isinstance(x, (int, float)) for x in (r, g_val, b)):
-                        result.append([r, g_val, b])
-            return result
-    return []
-
-
-def _analyze_background_luminance_analytical(lottie, targets, bounds):
-    target_ids = set(id(t) for t in targets)
+def _is_lottie_light(lottie, text_targets):
+    colors = []
     
-    def overlaps(shape_bounds, text_bounds):
-        if not shape_bounds or not text_bounds:
-            return False
-        sx1, sy1, sx2, sy2 = shape_bounds
-        tx1, ty1, tx2, ty2 = text_bounds
-        return sx1 <= tx2 and sx2 >= tx1 and sy1 <= ty2 and sy2 >= ty1
-
-    overlapping_colors = []
-
-    def walk(obj, is_in_target=False):
-        if not isinstance(obj, (dict, list)):
+    def walk(o, is_in_target=False):
+        if not isinstance(o, (dict, list)):
             return
-        if isinstance(obj, dict):
-            if id(obj) in target_ids:
+        if isinstance(o, dict):
+            if o in text_targets:
                 is_in_target = True
             
-            if not is_in_target and (obj.get("ty") == "gr" or obj.get("ty") == 4):
-                items = obj.get("it", obj.get("shapes", []))
-                direct_shapes = [x for x in items if isinstance(x, dict) and x.get("ty") == "sh"]
-                direct_fills = [x for x in items if isinstance(x, dict) and x.get("ty") in ("fl", "gf", "gs")]
-                
-                if direct_shapes and direct_fills:
-                    verts = _collect_path_verts(direct_shapes)
-                    sb = _verts_to_bounds(verts)
-                    if overlaps(sb, bounds):
-                        for fill in direct_fills:
-                            ity = fill.get("ty")
-                            if ity == "fl":
-                                c_k = fill.get("c", {}).get("k", [])
-                                if isinstance(c_k, list) and len(c_k) >= 3:
-                                    if all(isinstance(x, (int, float)) for x in c_k[:3]):
-                                        overlapping_colors.append(c_k[:3])
-                            elif ity in ("gf", "gs"):
-                                gc = _extract_gradient_colors(fill)
-                                overlapping_colors.extend(gc)
-                                
-            for v in obj.values():
+            ty = o.get("ty")
+            if ty == "fl" and not is_in_target:
+                c_k = o.get("c", {}).get("k", [])
+                if isinstance(c_k, list) and len(c_k) >= 3:
+                    if all(isinstance(x, (int, float)) for x in c_k[:3]):
+                        colors.append(c_k[:3])
+            elif ty == "gf" and not is_in_target:
+                g_k = o.get("g", {}).get("k", [])
+                if isinstance(g_k, list) and len(g_k) >= 4:
+                    i = 0
+                    while i + 3 < len(g_k):
+                        if all(isinstance(x, (int, float)) for x in g_k[i:i+4]):
+                            colors.append(g_k[i+1:i+4])
+                        i += 4
+                        if i > 12:
+                            break
+            
+            for v in o.values():
                 walk(v, is_in_target)
         else:
-            for item in obj:
+            for item in o:
                 walk(item, is_in_target)
-
+                
     walk(lottie)
-    
-    if not overlapping_colors:
+    if not colors:
         return False
         
-    lums = [0.2126*r + 0.7152*g + 0.0722*b for r, g, b in overlapping_colors]
+    lums = [0.2126*r + 0.7152*g + 0.0722*b for r, g, b in colors]
     avg_lum = sum(lums) / len(lums)
     return avg_lum > 0.45
 
 
-def _replace_textgroup(lottie, new_shapes, height=None, raw_data=None, bounds=None):
+def _replace_textgroup(lottie, new_shapes, height=None):
     targets = _find_text_targets(lottie)
     if not targets:
         return False
-
-    is_light = _analyze_background_luminance_analytical(lottie, targets, bounds)
-    logger.debug(f"Analytical background luminance analysis is_light={is_light}")
-
+        
+    is_light = _is_lottie_light(lottie, targets)
     if is_light:
         fill_color = [0.05, 0.05, 0.05, 1]
     else:
@@ -697,7 +597,7 @@ def _optimize_lottie_floats(o):
     return o
 
 
-def modify_lottie(lottie: dict, new_text: str, font_path: str = None, raw_data: bytes = None) -> bool:
+def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if not font_path:
         font_path = _ensure_font()
     if not font_path:
@@ -710,7 +610,7 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None, raw_data: 
         cy = (y1 + y2) / 2
         height = max(abs(y2 - y1), 5.)
         ns = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width=max(abs(x2 - x1), 5.))
-        if ns and _replace_textgroup(lottie, ns, height, raw_data=raw_data, bounds=bounds):
+        if ns and _replace_textgroup(lottie, ns, height):
             changed = True
     if _find_username_bounds(lottie):
         if _replace_username(lottie, NEW_USERNAME, font_path):
@@ -955,7 +855,7 @@ class JellyParserMod(loader.Module):
                 decompressed = gzip.decompress(raw)
                 lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
                 orig_size = len(decompressed)
-                res = modify_lottie(lottie_obj, "jelly", raw_data=raw)
+                res = modify_lottie(lottie_obj, "jelly")
                 lottie_obj = _optimize_lottie_floats(lottie_obj)
                 
                 serialized = orjson.dumps(lottie_obj) if HAS_ORJSON else json.dumps(lottie_obj, separators=(",", ":")).encode("utf-8")
