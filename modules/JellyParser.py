@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.5                     ║
+# ║                        🔮 JellyParser v0.2.8                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║        v0.2.5: плоская Lottie структура и встроенная отладка      ║
+# ║ v0.2.8: фикс белого фона + трёхэтапный контраст + доп. проверка  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -59,7 +59,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 5)
+__version__ = (0, 2, 8)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -163,13 +163,19 @@ def _collect_path_verts(obj):
     def _walk(o):
         if isinstance(o, dict):
             if o.get("ty") == "sh":
-                k = o.get("ks", {}).get("k", {})
-                if isinstance(k, list) and k and isinstance(k[0], dict):
-                    k = k[0].get("s", k[0])
-                if isinstance(k, dict):
-                    for v in k.get("v", []):
-                        if isinstance(v, (list, tuple)) and len(v) >= 2:
-                            verts.append((float(v[0]), float(v[1])))
+                ks = o.get("ks", {})
+                def _walk_ks(x):
+                    if isinstance(x, dict):
+                        if "v" in x and isinstance(x["v"], list):
+                            for v in x["v"]:
+                                if isinstance(v, (list, tuple)) and len(v) >= 2:
+                                    verts.append((float(v[0]), float(v[1])))
+                        for val in x.values():
+                            _walk_ks(val)
+                    elif isinstance(x, list):
+                        for item in x:
+                            _walk_ks(item)
+                _walk_ks(ks)
             for val in o.values(): _walk(val)
         elif isinstance(o, list):
             for item in o: _walk(item)
@@ -293,7 +299,9 @@ def _find_text_targets(lottie):
     named_targets = []
     for el in elements:
         ty = el.get("ty")
-        if ty == 4 or ty == "gr":
+        # ty==4 is a top-level ShapeLayer — skip it as a direct target,
+        # only target "gr" groups to avoid wiping the whole layer (body/outline etc.)
+        if ty == "gr":
             if _is_keyword_match(el):
                 if _count_paths(el) >= 1:
                     named_targets.append(el)
@@ -433,45 +441,284 @@ def _extract_styles(obj):
 
 
 def _is_lottie_light(lottie, text_targets):
-    colors = []
-    
-    def walk(o, is_in_target=False):
-        if not isinstance(o, (dict, list)):
-            return
+    """
+    Определяет цвет текста: белый (False) или тёмный (True).
+
+    Трёхэтапная логика:
+
+    1. Смотрим fill-цвета ВНУТРИ текстовых таргетов.
+       Если есть ЦВЕТНОЙ тёмный fill (lum < 0.4, не серый/чёрный) — это фоновая
+       плашка тёмного цвета под текстом → белый текст (False).
+       Серый/чёрный (max-min < 0.08) игнорируем — это текст предыдущей замены или outline.
+       Белый (lum >= 0.95, серый) тоже игнорируем — это текст предыдущей замены.
+
+    2. Собираем ВСЕ цвета эмодзи (fills + градиенты, вне таргетов).
+       Если минимальная яркость < 0.35 — есть тёмные элементы → белый текст (False).
+       Это ловит тёмные подиумы/фоны, нарисованные fills.
+
+    3. Если min >= 0.35: смотрим медианную яркость (fills + градиенты).
+       median >= 0.65 → фон светлый → тёмный текст (True).
+       Иначе → белый текст (False).
+
+    ИСПРАВЛЕНО в v0.2.7:
+    - Правильный парсинг градиентов: g.k.k (вложенный объект) + g.p (кол-во стопов)
+      Ранее g.k читался как список напрямую, но на деле это объект {k:[...], a:0},
+      поэтому isinstance(g_k, list) возвращало False и градиенты игнорировались.
+    - Градиенты (gf/gs) теперь включены в оба шага (min + median).
+    - Убрана инверсия: fill внутри таргета = белый/серый → это старый текст, игнорируем.
+    """
+    def _lum(rgb):
+        return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+
+    def _is_gray(rgb):
+        return max(rgb) - min(rgb) < 0.08
+
+    def _parse_gradient_colors(o):
+        """Правильный парсинг цветов из gf/gs объекта с учётом g.p и вложенного g.k.k"""
+        g = o.get("g", {})
+        p = g.get("p", 0) if isinstance(g, dict) else 0
+        gk = g.get("k", {}) if isinstance(g, dict) else {}
+        # g.k может быть объектом {k: [...], a: 0} или сразу списком
+        if isinstance(gk, dict):
+            gk = gk.get("k", [])
+        if not isinstance(gk, list):
+            return []
+        colors = []
+        if p > 0:
+            # Берём только цветовые стопы: первые p*4 значений [pos, r, g, b, ...]
+            color_data = gk[: p * 4]
+            i = 0
+            while i + 3 < len(color_data):
+                r_, gg_, b_ = color_data[i + 1: i + 4]
+                if all(isinstance(x, (int, float)) for x in (r_, gg_, b_)):
+                    colors.append((float(r_), float(gg_), float(b_)))
+                i += 4
+        else:
+            # Fallback без p: парсим пока позиция в [0..1]
+            i = 0
+            while i + 3 < len(gk):
+                v4 = gk[i: i + 4]
+                if all(isinstance(x, (int, float)) for x in v4):
+                    pos = v4[0]
+                    if 0.0 <= pos <= 1.0 and all(0.0 <= c <= 1.0 for c in v4[1:4]):
+                        colors.append((float(v4[1]), float(v4[2]), float(v4[3])))
+                        i += 4
+                    else:
+                        break
+                else:
+                    i += 1
+        return colors
+
+    # --- Шаг 1: цветной тёмный fill внутри текстового таргета ---
+    target_fills = []
+
+    def walk_target(o):
         if isinstance(o, dict):
-            if o in text_targets:
+            if o.get("ty") == "fl":
+                ck = o.get("c", {}).get("k", [])
+                if isinstance(ck, list) and len(ck) >= 3 and all(isinstance(x, (int, float)) for x in ck[:3]):
+                    target_fills.append(tuple(float(x) for x in ck[:3]))
+            for v in o.values():
+                if isinstance(v, (dict, list)):
+                    walk_target(v)
+        elif isinstance(o, list):
+            for item in o:
+                walk_target(item)
+
+    for t in text_targets:
+        walk_target(t)
+
+    # Игнорируем серые/белые fills внутри таргета — это текст от предыдущего парсинга
+    colored_target_fills = [c for c in target_fills if not _is_gray(c) and _lum(c) < 0.95]
+    if any(_lum(c) < 0.4 for c in colored_target_fills):
+        return False  # цветной тёмный фон плашки → белый текст
+
+    # --- Шаги 2 и 3: яркость всего эмодзи (вне таргетов), fills + градиенты ---
+    text_target_ids = set(id(t) for t in text_targets)
+    all_lums = []
+
+    def walk(o, in_target=False):
+        if isinstance(o, dict):
+            if id(o) in text_target_ids:
+                in_target = True
+            if not in_target:
+                ty = o.get("ty")
+                if ty == "fl":
+                    ck = o.get("c", {}).get("k", [])
+                    if isinstance(ck, list) and len(ck) >= 3 and all(isinstance(x, (int, float)) for x in ck[:3]):
+                        all_lums.append(_lum(tuple(float(x) for x in ck[:3])))
+                elif ty in ("gf", "gs"):
+                    for c in _parse_gradient_colors(o):
+                        all_lums.append(_lum(c))
+            for v in o.values():
+                if isinstance(v, (dict, list)):
+                    walk(v, in_target)
+        elif isinstance(o, list):
+            for item in o:
+                walk(item, in_target)
+
+    walk(lottie)
+
+    if not all_lums:
+        return False  # умолчание: белый текст
+
+    min_lum = min(all_lums)
+    # Шаг 2: есть тёмные элементы → белый текст
+    if min_lum < 0.35:
+        return False
+
+    # Шаг 3: всё светлое — смотрим медиану
+    lums = sorted(all_lums)
+    median_lum = lums[len(lums) // 2]
+    return median_lum >= 0.65
+
+def _extract_gradient_colors(obj):
+    g = obj.get("g", {})
+    p = g.get("p", 0) if isinstance(g, dict) else 0
+    gk = g.get("k", {}) if isinstance(g, dict) else {}
+    if isinstance(gk, dict):
+        gk = gk.get("k", [])
+    if not isinstance(gk, list):
+        return []
+    colors = []
+    if p > 0:
+        color_data = gk[: p * 4]
+        i = 0
+        while i + 3 < len(color_data):
+            r_, gg_, b_ = color_data[i + 1: i + 4]
+            if all(isinstance(x, (int, float)) for x in (r_, gg_, b_)):
+                colors.append((float(r_), float(gg_), float(b_)))
+            i += 4
+    else:
+        i = 0
+        while i + 3 < len(gk):
+            v4 = gk[i: i + 4]
+            if all(isinstance(x, (int, float)) for x in v4):
+                pos = v4[0]
+                if 0.0 <= pos <= 1.0 and all(0.0 <= c <= 1.0 for c in v4[1:4]):
+                    colors.append((float(v4[1]), float(v4[2]), float(v4[3])))
+                    i += 4
+                else:
+                    break
+            else:
+                i += 1
+    return colors
+
+
+def _has_white_overlapping_bg(lottie, targets, bounds):
+    if not bounds:
+        return False
+    target_ids = set(id(t) for t in targets)
+    
+    def overlaps(sb, tb):
+        if not sb or not tb: return False
+        ix1 = max(sb[0], tb[0])
+        iy1 = max(sb[1], tb[1])
+        ix2 = min(sb[2], tb[2])
+        iy2 = min(sb[3], tb[3])
+        if ix1 < ix2 and iy1 < iy2:
+            intersection_area = (ix2 - ix1) * (iy2 - iy1)
+            target_area = (tb[2] - tb[0]) * (tb[3] - tb[1])
+            if target_area <= 0:
+                return False
+            return (intersection_area / target_area) >= 0.15
+        return False
+
+    found_white = [False]
+
+    def walk(obj, is_in_target=False):
+        if found_white[0]:
+            return
+        if not isinstance(obj, (dict, list)):
+            return
+        if isinstance(obj, dict):
+            if id(obj) in target_ids:
                 is_in_target = True
             
-            ty = o.get("ty")
-            if ty == "fl" and not is_in_target:
-                c_k = o.get("c", {}).get("k", [])
-                if isinstance(c_k, list) and len(c_k) >= 3:
-                    if all(isinstance(x, (int, float)) for x in c_k[:3]):
-                        colors.append(c_k[:3])
-            elif ty == "gf" and not is_in_target:
-                g_k = o.get("g", {}).get("k", [])
-                if isinstance(g_k, list) and len(g_k) >= 4:
-                    i = 0
-                    while i + 3 < len(g_k):
-                        if all(isinstance(x, (int, float)) for x in g_k[i:i+4]):
-                            colors.append(g_k[i+1:i+4])
-                        i += 4
-                        if i > 12:
-                            break
+            ty = obj.get("ty")
+            nm = obj.get("nm")
+            nm_lower = (nm.lower() if isinstance(nm, str) else "")
             
-            for v in o.values():
-                walk(v, is_in_target)
-        else:
-            for item in o:
-                walk(item, is_in_target)
+            if "user" in nm_lower:
+                return
+            
+            if not is_in_target and (ty == "gr" or ty == 4):
+                shapes = []
+                fills = []
+                def collect_sh_fl(o):
+                    if isinstance(o, dict):
+                        sub_nm = o.get("nm")
+                        if isinstance(sub_nm, str) and "user" in sub_nm.lower():
+                            return
+                        t_ = o.get("ty")
+                        if t_ == "sh":
+                            shapes.append(o)
+                        elif t_ in ("fl", "gf", "gs"):
+                            fills.append(o)
+                        for val in o.values():
+                            if isinstance(val, (dict, list)):
+                                collect_sh_fl(val)
+                    elif isinstance(o, list):
+                        for item in o:
+                            collect_sh_fl(item)
+                            
+                collect_sh_fl(obj)
                 
+                if shapes and fills:
+                    non_target_shapes = []
+                    for sh in shapes:
+                        is_target_sh = False
+                        for t in targets:
+                            if _is_descendant(sh, t) or sh is t:
+                                is_target_sh = True
+                                break
+                        if not is_target_sh:
+                            non_target_shapes.append(sh)
+                            
+                    if non_target_shapes:
+                        verts = []
+                        for sh in non_target_shapes:
+                            verts.extend(_collect_path_verts(sh))
+                        sb = _verts_to_bounds(verts)
+                        if sb and overlaps(sb, bounds):
+                            non_target_fills = []
+                            for f in fills:
+                                is_target_f = False
+                                for t in targets:
+                                    if _is_descendant(f, t) or f is t:
+                                        is_target_f = True
+                                        break
+                                if not is_target_f:
+                                    non_target_fills.append(f)
+                                    
+                            for fill in non_target_fills:
+                                ity = fill.get("ty")
+                                if ity == "fl":
+                                    ck = fill.get("c", {}).get("k", [])
+                                    if isinstance(ck, list) and len(ck) >= 3:
+                                        if all(isinstance(x, (int, float)) for x in ck[:3]):
+                                            r, g, b = ck[:3]
+                                            lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                                            if lum > 0.85:
+                                                found_white[0] = True
+                                                return
+                                elif ity in ("gf", "gs"):
+                                    gcs = _extract_gradient_colors(fill)
+                                    if gcs:
+                                        avg_lum = sum(0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] for c in gcs) / len(gcs)
+                                        if avg_lum > 0.85:
+                                            found_white[0] = True
+                                            return
+                                            
+            for v in obj.values():
+                if isinstance(v, (dict, list)):
+                    walk(v, is_in_target)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item, is_in_target)
+
     walk(lottie)
-    if not colors:
-        return False
-        
-    lums = [0.2126*r + 0.7152*g + 0.0722*b for r, g, b in colors]
-    avg_lum = sum(lums) / len(lums)
-    return avg_lum > 0.45
+    return found_white[0]
 
 
 def _replace_textgroup(lottie, new_shapes, height=None):
@@ -479,8 +726,10 @@ def _replace_textgroup(lottie, new_shapes, height=None):
     if not targets:
         return False
         
-    is_light = _is_lottie_light(lottie, targets)
-    if is_light:
+    bounds = _get_textgroup_bounds(lottie)
+    if bounds and _has_white_overlapping_bg(lottie, targets, bounds):
+        fill_color = [0.05, 0.05, 0.05, 1]
+    elif _is_lottie_light(lottie, targets):
         fill_color = [0.05, 0.05, 0.05, 1]
     else:
         fill_color = [1, 1, 1, 1]
@@ -493,31 +742,27 @@ def _replace_textgroup(lottie, new_shapes, height=None):
             "r": 1,
             "nm": "Fill 1"
         }]
-            
-        if target.get("ty") == 4:
-            # For a ShapeLayer, shapes can be flat
-            target["shapes"] = new_shapes + styles
-        else:
-            # For a Group, we need to preserve or create a transform shape "tr"
-            original_tr = None
-            for x in target.get("it", []):
-                if x.get("ty") == "tr":
-                    original_tr = x
-                    break
-            if not original_tr:
-                original_tr = {
-                    "ty": "tr",
-                    "p": {"a": 0, "k": [0, 0]},
-                    "a": {"a": 0, "k": [0, 0]},
-                    "s": {"a": 0, "k": [100, 100]},
-                    "r": {"a": 0, "k": 0},
-                    "o": {"a": 0, "k": 100},
-                    "sk": {"a": 0, "k": 0},
-                    "sa": {"a": 0, "k": 0},
-                    "nm": "Transform"
-                }
-            target["it"] = new_shapes + styles + [original_tr]
-            
+
+        # target is always a "gr" group — preserve its transform "tr"
+        original_tr = None
+        for x in target.get("it", []):
+            if x.get("ty") == "tr":
+                original_tr = x
+                break
+        if not original_tr:
+            original_tr = {
+                "ty": "tr",
+                "p": {"a": 0, "k": [0, 0]},
+                "a": {"a": 0, "k": [0, 0]},
+                "s": {"a": 0, "k": [100, 100]},
+                "r": {"a": 0, "k": 0},
+                "o": {"a": 0, "k": 100},
+                "sk": {"a": 0, "k": 0},
+                "sa": {"a": 0, "k": 0},
+                "nm": "Transform"
+            }
+        target["it"] = new_shapes + styles + [original_tr]
+
     return True
 
 
@@ -572,7 +817,7 @@ def _replace_username(lottie, new_text, font_path):
                             return any(x.get("ty") == "fl" for x in lst)
                         style = [
                             x for x in items
-                            if x.get("ty") not in ("sh", "el", "rc", "sr")
+                            if x.get("ty") not in ("sh", "el", "rc", "sr", "st", "gs")
                             and not (x.get("ty") == "gr" and not _hfl(x.get("it", x.get("shapes", []))))
                         ]
                         items[:] = ns + style
