@@ -28,8 +28,6 @@
 #
 # meta developer: @justidev
 # requires: Pillow fonttools
-#
-# version bump: improved text targeting parser
 
 import asyncio
 import glob
@@ -47,21 +45,21 @@ from telethon.tl.types import DocumentAttributeCustomEmoji, DocumentAttributeSti
 from .. import loader, utils
 
 try:
+    import orjson
+    HAS_ORJSON = True
+except ImportError:
+    HAS_ORJSON = False
+
+try:
     from fontTools.ttLib import TTFont
     from fontTools.pens.recordingPen import DecomposingRecordingPen
     HAS_FONTTOOLS = True
 except ImportError:
     HAS_FONTTOOLS = False
 
-try:
-    import glaxnimate
-    HAS_GLAXNIMATE = True
-except Exception:
-    HAS_GLAXNIMATE = False
-
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 1, 6)
+__version__ = (0, 1, 7)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -215,77 +213,68 @@ def _has_fill(obj):
 
 
 def _get_all_elements(lottie):
-    def _walk_layer(layer):
-        yield layer
-        if "shapes" in layer:
-            for s in layer["shapes"]:
-                yield from _walk_shape(s)
-        if "it" in layer:
-            for s in layer["it"]:
-                yield from _walk_shape(s)
-
-    def _walk_shape(shape):
-        yield shape
-        if "it" in shape:
-            for s in shape["it"]:
-                yield from _walk_shape(s)
-        if "shapes" in shape:
-            for s in shape["shapes"]:
-                yield from _walk_shape(s)
-
+    todo = []
     if "layers" in lottie:
-        for l in lottie["layers"]:
-            yield from _walk_layer(l)
-            
+        todo.extend(lottie["layers"])
     if "assets" in lottie:
         for a in lottie["assets"]:
             if "layers" in a:
-                for l in a["layers"]:
-                    yield from _walk_layer(l)
+                todo.extend(a["layers"])
+    
+    while todo:
+        el = todo.pop()
+        yield el
+        sh = el.get("shapes")
+        if sh:
+            todo.extend(sh)
+        it = el.get("it")
+        if it:
+            todo.extend(it)
 
 
 def _is_descendant(child, parent):
-    found = False
-    def _check(o):
-        nonlocal found
-        if found: return
-        if isinstance(o, dict):
-            if o is child:
-                found = True
-                return
-            for val in o.values(): _check(val)
-        elif isinstance(o, list):
-            for item in o: _check(item)
+    todo = []
     if "shapes" in parent:
-        for s in parent["shapes"]: _check(s)
+        todo.extend(parent["shapes"])
     if "it" in parent:
-        for s in parent["it"]: _check(s)
-    return found
+        todo.extend(parent["it"])
+        
+    while todo:
+        o = todo.pop()
+        if o is child:
+            return True
+        sh = o.get("shapes")
+        if sh:
+            todo.extend(sh)
+        it = o.get("it")
+        if it:
+            todo.extend(it)
+    return False
 
 
 def _has_keyword_child(obj):
-    keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"]
-    found = False
-    def _check(o):
-        nonlocal found
-        if found: return
+    keywords = {"textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"}
+    todo = [obj]
+    while todo:
+        o = todo.pop()
         if isinstance(o, dict):
             nm = o.get("nm")
             if isinstance(nm, str) and nm:
                 nm_lower = nm.lower()
                 if "user" not in nm_lower and any(kw in nm_lower for kw in keywords):
-                    found = True
-                    return
-            for val in o.values(): _check(val)
+                    return True
+            for val in o.values():
+                if isinstance(val, (dict, list)):
+                    todo.append(val)
         elif isinstance(o, list):
-            for item in o: _check(item)
-    if isinstance(obj, dict):
-        for val in obj.values(): _check(val)
-    return found
+            for item in o:
+                if isinstance(item, (dict, list)):
+                    todo.append(item)
+    return False
 
 
 def _is_keyword_match(el):
-    keywords = ["textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"]
+    keywords = {"textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"}
     nm = el.get("nm")
     if isinstance(nm, str) and nm:
         nm_lower = nm.lower()
@@ -423,7 +412,9 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
 def _extract_styles(obj):
     styles = []
     seen = set()
-    def walk(o):
+    todo = [obj]
+    while todo:
+        o = todo.pop()
         if isinstance(o, dict):
             ty = o.get("ty")
             if ty in ("fl", "st", "gf", "gs"):
@@ -433,11 +424,11 @@ def _extract_styles(obj):
                     styles.append(o)
             for v in o.values():
                 if isinstance(v, (dict, list)):
-                    walk(v)
+                    todo.append(v)
         elif isinstance(o, list):
             for item in o:
-                walk(item)
-    walk(obj)
+                if isinstance(item, (dict, list)):
+                    todo.append(item)
     return styles
 
 
@@ -753,16 +744,7 @@ class JellyParserMod(loader.Module):
                 raw = await download_cached(self._client, doc)
                 decompressed = gzip.decompress(raw)
                 
-                # Optional Glaxnimate verification
-                if HAS_GLAXNIMATE:
-                    try:
-                        with glaxnimate.environment.Headless():
-                            gdoc = glaxnimate.model.Document()
-                            glaxnimate.io.registry.from_extension("json").load(gdoc, decompressed)
-                    except Exception as ge:
-                        logger.warning(f"Glaxnimate verification failed for doc {i}: {ge}")
-
-                lottie_obj = json.loads(decompressed.decode("utf-8"))
+                lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
                 bounds = _get_textgroup_bounds(lottie_obj)
                 if bounds:
                     return doc
@@ -802,9 +784,11 @@ class JellyParserMod(loader.Module):
             
             # Decompress, modify text placeholder to "jelly", compress back
             try:
-                lottie_obj = json.loads(gzip.decompress(raw).decode("utf-8"))
+                decompressed = gzip.decompress(raw)
+                lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
                 modify_lottie(lottie_obj, "jelly")
-                raw = gzip.compress(json.dumps(lottie_obj, separators=(",", ":")).encode("utf-8"), compresslevel=9)
+                serialized = orjson.dumps(lottie_obj) if HAS_ORJSON else json.dumps(lottie_obj, separators=(",", ":")).encode("utf-8")
+                raw = gzip.compress(serialized, compresslevel=9)
             except Exception as e:
                 logger.error(f"Failed to replace text with jelly for emoji {i}: {e}")
                 
