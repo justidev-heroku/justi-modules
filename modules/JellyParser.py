@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.2.4                     ║
+# ║                        🔮 JellyParser v0.2.5                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║        v0.2.4: плоская Lottie структура и встроенная отладка      ║
+# ║        v0.2.5: плоская Lottie структура и встроенная отладка      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -59,7 +59,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 2, 4)
+__version__ = (0, 2, 5)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -482,10 +482,8 @@ def _replace_textgroup(lottie, new_shapes, height=None):
     is_light = _is_lottie_light(lottie, targets)
     if is_light:
         fill_color = [0.05, 0.05, 0.05, 1]
-        outline_color = [1, 1, 1, 1]
     else:
         fill_color = [1, 1, 1, 1]
-        outline_color = [0, 0, 0, 1]
         
     for target in targets:
         styles = [{
@@ -495,19 +493,6 @@ def _replace_textgroup(lottie, new_shapes, height=None):
             "r": 1,
             "nm": "Fill 1"
         }]
-            
-        if height is not None:
-            stroke_width = max(height * 0.08, 1.5)
-            stroke_style = {
-                "ty": "st",
-                "nm": "TextOutline",
-                "c": {"a": 0, "k": outline_color},
-                "o": {"a": 0, "k": 100},
-                "w": {"a": 0, "k": stroke_width},
-                "lc": 1,
-                "lj": 1
-            }
-            styles.insert(0, stroke_style)
             
         if target.get("ty") == 4:
             # For a ShapeLayer, shapes can be flat
