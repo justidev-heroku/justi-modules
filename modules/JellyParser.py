@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.3.6                     ║
+# ║                        🔮 JellyParser v0.3.7                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.3.6: Оптимизации + Очистка SVG-логотипов + .jupd               ║
+# ║ v0.3.7: Игнорирование пустых слоев + Анализ всех эмодзи          ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -61,7 +61,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 3, 6)
+__version__ = (0, 3, 7)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -370,10 +370,23 @@ def _is_keyword_match(el):
     return _has_keyword_child(el)
 
 
+def _is_empty_text_layer(el):
+    if el.get("ty") != 5:
+        return False
+    t_data = el.get("t", {}).get("d", {}).get("k", [])
+    if isinstance(t_data, list) and len(t_data) > 0:
+        first_item = t_data[0]
+        if isinstance(first_item, dict):
+            text_str = first_item.get("s", {}).get("t", "")
+            if isinstance(text_str, str) and text_str.strip():
+                return False
+    return True
+
+
 def _find_text_targets(lottie):
     elements = list(_get_all_elements(lottie))
     
-    text_layers = [el for el in elements if el.get("ty") == 5]
+    text_layers = [el for el in elements if el.get("ty") == 5 and not _is_empty_text_layer(el)]
     if text_layers:
         return text_layers
 
@@ -1439,19 +1452,11 @@ class JellyParserMod(loader.Module):
                 has_text = bool(_find_text_targets(lottie_obj))
                 has_logo = _has_logo_elements(lottie_obj)
                 
-                if not has_text and not has_logo:
-                    return None
-                
                 bounds = _get_textgroup_bounds(lottie_obj)
-                if not bounds and has_logo:
-                    # В случае логотипа без текста используем стандартные границы для новой текстовой группы
-                    bounds = (-256.0, -25.0, 256.0, 25.0)
-                
                 target_info = f"HasText: {has_text}, HasLogo: {has_logo}"
                 debug_logs.append(f"Doc {i} ({getattr(doc, 'id', 'unknown')}): bounds={bounds}, info={target_info}")
                 
-                if bounds:
-                    return doc
+                return doc
             except Exception as e:
                 debug_logs.append(f"Doc {i} check failed: {e}")
             return None
