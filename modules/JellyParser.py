@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.3.4                     ║
+# ║                        🔮 JellyParser v0.3.5                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.3.4: Лимит разделения паков снижен до 180 эмодзи               ║
+# ║ v0.3.5: Автоконтраст текста + .jupd команда обновления            ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -60,7 +60,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 3, 4)
+__version__ = (0, 3, 5)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -393,8 +393,7 @@ def _get_textgroup_bounds(lottie):
     if targets:
         target = targets[0]
         if target.get("ty") == 5:
-            pos = target.get("ks", {}).get("p", {}).get("k", [0, 0])
-            cx, cy = (pos[0], pos[1]) if (isinstance(pos, list) and len(pos) >= 2) else (0.0, 0.0)
+            cx, cy = 0.0, 0.0
             font_size = 50.0
             max_width = 512.0
             return (cx - max_width / 2.0, cy - font_size / 2.0, cx + max_width / 2.0, cy + font_size / 2.0)
@@ -739,25 +738,66 @@ def _has_white_overlapping_bg(lottie, targets, bounds):
     return found_white[0]
 
 
+def _get_original_text_fill_color(targets):
+    """
+    v0.3.5: Читает ОРИГИНАЛЬНЫЙ цвет заливки текста из текстовых групп.
+
+    Вместо пересчёта контраста по фону, берёт цвет, который автор
+    исходного эмодзи выбрал для текста. Это гарантирует правильный контраст
+    в создаваемом паке.
+
+    Возвращает [r, g, b, a] или None если fill не найден.
+    """
+    for target in targets:
+        fills = []
+        def _collect_fills(obj):
+            if isinstance(obj, dict):
+                if obj.get("ty") == "fl":
+                    ck = obj.get("c", {}).get("k", [])
+                    if isinstance(ck, list) and len(ck) >= 3 and all(
+                        isinstance(x, (int, float)) for x in ck[:3]
+                    ):
+                        fills.append([float(ck[0]), float(ck[1]), float(ck[2]), 1])
+                for v in obj.values():
+                    if isinstance(v, (dict, list)):
+                        _collect_fills(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _collect_fills(item)
+        _collect_fills(target)
+        if fills:
+            return fills[0]
+    return None
+
+
 def _replace_textgroup(lottie, new_shapes, height=None):
     targets = _find_text_targets(lottie)
     if not targets:
         return False
 
-    # v0.2.9: определяем цвет текста через sibling fill в родительской группе
-    sibling_color = _get_sibling_fill_color(lottie, targets)
-    if sibling_color is not None:
-        # Sibling fill найден — используем его яркость
-        lum = 0.2126 * sibling_color[0] + 0.7152 * sibling_color[1] + 0.0722 * sibling_color[2]
+    # v0.3.5: автоконтраст — читаем оригинальный цвет текста из эмодзи
+    original_fill = _get_original_text_fill_color(targets)
+    if original_fill is not None:
+        # Оригинальный fill найден — используем его яркость для определения контраста
+        lum = 0.2126 * original_fill[0] + 0.7152 * original_fill[1] + 0.0722 * original_fill[2]
         if lum > 0.5:
-            fill_color = [1, 1, 1, 1]        # белый текст (фон тёмный)
+            fill_color = [1, 1, 1, 1]           # светлый текст (фон тёмный)
         else:
             fill_color = [0.05, 0.05, 0.05, 1]  # тёмный текст (фон светлый)
-    elif _is_lottie_light(lottie, targets):
-        fill_color = [0.05, 0.05, 0.05, 1]
     else:
-        fill_color = [1, 1, 1, 1]
-        
+        # Fallback: sibling fill в родительской группе
+        sibling_color = _get_sibling_fill_color(lottie, targets)
+        if sibling_color is not None:
+            lum = 0.2126 * sibling_color[0] + 0.7152 * sibling_color[1] + 0.0722 * sibling_color[2]
+            if lum > 0.5:
+                fill_color = [1, 1, 1, 1]
+            else:
+                fill_color = [0.05, 0.05, 0.05, 1]
+        elif _is_lottie_light(lottie, targets):
+            fill_color = [0.05, 0.05, 0.05, 1]
+        else:
+            fill_color = [1, 1, 1, 1]
+
     for target in targets:
         styles = [{
             "ty": "fl",
@@ -770,6 +810,7 @@ def _replace_textgroup(lottie, new_shapes, height=None):
         if target.get("ty") == 5:
             # Native text layer: convert to shape layer
             target["ty"] = 4
+            target.setdefault("ks", {}).setdefault("p", {"a": 0})["k"] = [0, 0, 0]
             target.pop("t", None)
             target["shapes"] = new_shapes + styles
             continue
@@ -1145,7 +1186,7 @@ class JellyParserMod(loader.Module):
                     pe("⏰", PE["clock"]) + f" <b>{label}...</b>\n\n"
                     f"<code>[{bar}]</code> {int(p / n * 100)}%\n"
                     f"<b>{p}/{n}</b>"
-                ))
+                ), parse_mode="HTML")
             except Exception:
                 pass
 
@@ -1192,28 +1233,28 @@ class JellyParserMod(loader.Module):
                 args = reply.text.strip()
         
         if not args:
-            await utils.answer(message, pe("ℹ️", PE["info"]) + " Укажите ссылку на эмодзи-пак: <code>.jparse https://t.me/addemoji/name</code>")
+            await utils.answer(message, pe("ℹ️", PE["info"]) + " Укажите ссылку на эмодзи-пак: <code>.jparse https://t.me/addemoji/name</code>", parse_mode="HTML")
             return
 
         match = re.search(r"(?:addemoji/|set=|addstickers/)([a-zA-Z0-9_]+)", args)
         if not match:
-            await utils.answer(message, pe("❌", PE["err"]) + " Некорректная ссылка на эмодзи/стикер пак.")
+            await utils.answer(message, pe("❌", PE["err"]) + " Некорректная ссылка на эмодзи/стикер пак.", parse_mode="HTML")
             return
         
         pack_short = match.group(1)
-        status_msg = await utils.answer(message, pe("⏰", PE["clock"]) + f" Получаем информацию о паке <code>{pack_short}</code>...")
+        status_msg = await utils.answer(message, pe("⏰", PE["clock"]) + f" Получаем информацию о паке <code>{pack_short}</code>...", parse_mode="HTML")
         
         try:
             fs = await self._client(functions.messages.GetStickerSetRequest(
                 stickerset=types.InputStickerSetShortName(short_name=pack_short), hash=0
             ))
         except Exception as e:
-            await status_msg.edit(pe("❌", PE["err"]) + f" Не удалось получить пак: <code>{e}</code>")
+            await status_msg.edit(pe("❌", PE["err"]) + f" Не удалось получить пак: <code>{e}</code>", parse_mode="HTML")
             return
 
         docs = list(fs.documents)
         if not docs:
-            await status_msg.edit(pe("❌", PE["err"]) + " Пак пуст.")
+            await status_msg.edit(pe("❌", PE["err"]) + " Пак пуст.", parse_mode="HTML")
             return
 
         set_is_emoji = bool(getattr(fs.set, "emojis", False))
@@ -1224,10 +1265,10 @@ class JellyParserMod(loader.Module):
                 set_is_emoji = False
         
         if not set_is_emoji:
-            await status_msg.edit(pe("❌", PE["err"]) + " Это не эмодзи-пак (только эмодзи-паки поддерживаются для парсинга).")
+            await status_msg.edit(pe("❌", PE["err"]) + " Это не эмодзи-пак (только эмодзи-паки поддерживаются для парсинга).", parse_mode="HTML")
             return
 
-        await status_msg.edit(pe("⏰", PE["clock"]) + f" Скачиваем и парсим {len(docs)} эмодзи...")
+        await status_msg.edit(pe("⏰", PE["clock"]) + f" Скачиваем и парсим {len(docs)} эмодзи...", parse_mode="HTML")
 
         debug_logs = []
 
@@ -1242,7 +1283,7 @@ class JellyParserMod(loader.Module):
                 
                 targets = _find_text_targets(lottie_obj)
                 if not targets:
-                    _add_default_text_layer(lottie_obj)
+                    return None
                 
                 bounds = _get_textgroup_bounds(lottie_obj)
                 target_info = f"Target types: {[t.get('ty') for t in targets]}" if targets else "None"
@@ -1258,10 +1299,10 @@ class JellyParserMod(loader.Module):
         filtered_docs = [d for d in filtered_docs if d is not None]
 
         if not filtered_docs:
-            await status_msg.edit(pe("❌", PE["err"]) + " В паке не найдено эмодзи с текстовыми группами (textGroup).")
+            await status_msg.edit(pe("❌", PE["err"]) + " В паке не найдено эмодзи с текстовыми группами (textGroup).", parse_mode="HTML")
             return
 
-        await status_msg.edit(pe("⏰", PE["clock"]) + f" Найдено <b>{len(filtered_docs)}</b> текстовых эмодзи. Создаём пак...")
+        await status_msg.edit(pe("⏰", PE["clock"]) + f" Найдено <b>{len(filtered_docs)}</b> текстовых эмодзи. Создаём пак...", parse_mode="HTML")
 
         # Find first free mainemoji_jellycolor{n}_by_justidev
         n = 1
@@ -1309,11 +1350,11 @@ class JellyParserMod(loader.Module):
             up = await self._client.upload_file(buf, file_name=buf.name)
             return await _upload_item(self._client, mee, up, "application/x-tgsticker", alt, True)
 
-        await status_msg.edit(pe("⏰", PE["clock"]) + f" Загружаем {len(filtered_docs)} эмодзи в новый пак...")
+        await status_msg.edit(pe("⏰", PE["clock"]) + f" Загружаем {len(filtered_docs)} эмодзи в новый пак...", parse_mode="HTML")
         uploaded_items = await self._parallel(filtered_docs, _upload_doc, "Загрузка медиа", status_msg)
         
         if not uploaded_items:
-            await status_msg.edit(pe("❌", PE["err"]) + " Не удалось загрузить ни одного эмодзи.")
+            await status_msg.edit(pe("❌", PE["err"]) + " Не удалось загрузить ни одного эмодзи.", parse_mode="HTML")
             return
 
         try:
@@ -1338,4 +1379,69 @@ class JellyParserMod(loader.Module):
                 log_info = f"\n\n📝 Лог отладки сохранен в: <code>{debug_path}</code>"
             except Exception:
                 log_info = ""
-            await status_msg.edit(pe("❌", PE["err"]) + f" Не удалось создать набор: <code>{e}</code>{log_info}")
+            await status_msg.edit(pe("❌", PE["err"]) + f" Не удалось создать набор: <code>{e}</code>{log_info}", parse_mode="HTML")
+
+    @loader.command()
+    async def jupdate(self, message: Message):
+        """Проверить обновления и обновить модули по коммитам"""
+        msg = await utils.answer(message, pe("⏰", PE["clock"]) + " Проверяем наличие обновлений...", parse_mode="HTML")
+
+        cwd = "/root/justi-modules"
+        if not os.path.exists(cwd):
+            await msg.edit(pe("❌", PE["err"]) + f" Директория репозитория <code>{cwd}</code> не найдена.", parse_mode="HTML")
+            return
+
+        async def run_cmd(cmd: str) -> tuple:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd
+            )
+            stdout, stderr = await proc.communicate()
+            return proc.returncode, stdout.decode("utf-8").strip(), stderr.decode("utf-8").strip()
+
+        await run_cmd("git config --global --add safe.directory /root/justi-modules")
+
+        code, out, err = await run_cmd("git fetch origin main")
+        if code != 0:
+            await msg.edit(pe("❌", PE["err"]) + f" Не удалось получить обновления с GitHub: <code>{err or out}</code>", parse_mode="HTML")
+            return
+
+        code_l, local_commit, err_l = await run_cmd("git rev-parse HEAD")
+        code_r, remote_commit, err_r = await run_cmd("git rev-parse origin/main")
+
+        if code_l != 0 or code_r != 0:
+            await msg.edit(pe("❌", PE["err"]) + " Не удалось получить информацию о коммитах.", parse_mode="HTML")
+            return
+
+        if local_commit == remote_commit:
+            await msg.edit(
+                pe("✅", PE["ok"]) + " <b>У вас уже установлена актуальная версия модулей!</b>\n\n"
+                f"Коммит: <code>{local_commit[:7]}</code>",
+                parse_mode="HTML"
+            )
+            return
+
+        await msg.edit(pe("⏰", PE["clock"]) + " Обновляем файлы репозитория...", parse_mode="HTML")
+        code_p, out_p, err_p = await run_cmd("git pull --rebase origin main")
+        if code_p != 0:
+            await msg.edit(pe("❌", PE["err"]) + f" Ошибка при обновлении репозитория: <code>{err_p or out_p}</code>", parse_mode="HTML")
+            return
+
+        try:
+            import shutil
+            shutil.copy2("/root/justi-modules/modules/JellyColor.py", "/root/JellyColor.py")
+            shutil.copy2("/root/justi-modules/modules/JellyParser.py", "/root/JellyParser.py")
+        except Exception:
+            pass
+
+        await msg.edit(pe("⏰", PE["clock"]) + " Устанавливаем обновления через встроенную команду...", parse_mode="HTML")
+
+        url_color = "https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/modules/JellyColor.py"
+        url_parser = "https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/modules/JellyParser.py"
+
+        await self._client.send_message(message.chat_id, f".dlm {url_color}")
+        await self._client.send_message(message.chat_id, f".dlm {url_parser}")
+
+        await msg.delete()
