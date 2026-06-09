@@ -1178,6 +1178,38 @@ def _has_logo_elements(lottie: dict) -> bool:
     return False
 
 
+def _remove_empty_text_layers(lottie: dict) -> bool:
+    """
+    Удаляет пустые или состоящие только из пробелов текстовые слои.
+    """
+    removed = False
+    
+    def filter_layers(layers):
+        nonlocal removed
+        if not isinstance(layers, list):
+            return
+        i = 0
+        while i < len(layers):
+            l = layers[i]
+            if not isinstance(l, dict):
+                i += 1
+                continue
+            if _is_empty_text_layer(l):
+                layers.pop(i)
+                removed = True
+            else:
+                i += 1
+                
+    if "layers" in lottie:
+        filter_layers(lottie["layers"])
+    if "assets" in lottie:
+        for asset in lottie["assets"]:
+            if isinstance(asset, dict) and "layers" in asset:
+                filter_layers(asset["layers"])
+                
+    return removed
+
+
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if not font_path:
         font_path = _ensure_font()
@@ -1185,6 +1217,9 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
         return False
     changed = False
     
+    if _remove_empty_text_layers(lottie):
+        changed = True
+        
     if _remove_logo_elements(lottie):
         changed = True
         
