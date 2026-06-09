@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.4.3                     ║
+# ║                        🎨 JellyColor v4.4.4                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.4.3: fix bool is not iterable (always_allow callback crash)  ║
+# ║  v4.4.4: add .jupdate command for git update and commit check     ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 4, 3)
+__version__ = (4, 4, 4)
 
 import asyncio
 import glob
@@ -3066,3 +3066,70 @@ class JellyColorMod(loader.Module):
         await self._client.send_file(message.chat_id,bd,caption=f"📄 Dump <code>{eid}</code>",parse_mode="HTML")
         await self._client.send_file(message.chat_id,br)
         await msg.delete()
+
+    @loader.command()
+    async def jupdate(self, message: Message):
+        """Проверить обновления и обновить модули по коммитам"""
+        msg = await utils.answer(message, pe("⏰", PE["clock"]) + " Проверяем наличие обновлений...")
+        
+        cwd = "/root/justi-modules"
+        if not os.path.exists(cwd):
+            await msg.edit(pe("❌", PE["err"]) + f" Директория репозитория <code>{cwd}</code> не найдена.")
+            return
+
+        async def run_cmd(cmd: str) -> tuple[int, str, str]:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd
+            )
+            stdout, stderr = await proc.communicate()
+            return proc.returncode, stdout.decode("utf-8").strip(), stderr.decode("utf-8").strip()
+
+        # Check safe.directory configuration
+        await run_cmd("git config --global --add safe.directory /root/justi-modules")
+
+        # Fetch remote updates
+        code, out, err = await run_cmd("git fetch origin main")
+        if code != 0:
+            await msg.edit(pe("❌", PE["err"]) + f" Не удалось получить обновления с GitHub: <code>{err or out}</code>")
+            return
+
+        # Get local and remote commit hashes
+        code_l, local_commit, err_l = await run_cmd("git rev-parse HEAD")
+        code_r, remote_commit, err_r = await run_cmd("git rev-parse origin/main")
+
+        if code_l != 0 or code_r != 0:
+            await msg.edit(pe("❌", PE["err"]) + " Не удалось получить информацию о коммитах.")
+            return
+
+        if local_commit == remote_commit:
+            await msg.edit(
+                pe("✅", PE["ok"]) + " <b>У вас уже установлена актуальная версия модулей!</b>\n\n"
+                f"Коммит: <code>{local_commit[:7]}</code>"
+            )
+            return
+
+        # Perform git pull
+        await msg.edit(pe("⏰", PE["clock"]) + " Обновляем файлы репозитория...")
+        code_p, out_p, err_p = await run_cmd("git pull --rebase origin main")
+        if code_p != 0:
+            await msg.edit(pe("❌", PE["err"]) + f" Ошибка при обновлении репозитория: <code>{err_p or out_p}</code>")
+            return
+
+        # Copy files to active locations
+        try:
+            import shutil
+            shutil.copy2("/root/justi-modules/modules/JellyColor.py", "/root/JellyColor.py")
+            shutil.copy2("/root/justi-modules/modules/JellyParser.py", "/root/JellyParser.py")
+        except Exception as e:
+            await msg.edit(pe("❌", PE["err"]) + f" Ошибка при копировании файлов: <code>{e}</code>")
+            return
+
+        await msg.edit(
+            pe("✅", PE["ok"]) + " <b>Модули успешно обновлены до последней версии!</b>\n\n"
+            f"Предыдущий коммит: <code>{local_commit[:7]}</code>\n"
+            f"Новый коммит: <code>{remote_commit[:7]}</code>\n\n"
+            "Пожалуйста, перезагрузите юзербот с помощью <code>.restart</code> для применения изменений."
+        )
