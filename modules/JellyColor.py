@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.4.6                     ║
+# ║                        🎨 JellyColor v4.4.7                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.4.6: Удалена встроенная команда jupdate                      ║
+# ║  v4.4.7: Добавлен шаблон Секс на пляже                           ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 4, 6)
+__version__ = (4, 4, 7)
 
 import asyncio
 import glob
@@ -167,6 +167,7 @@ TEMPLATE_SETS = [
     {"title": "✨ Эксклюзивные", "short_name": "mainemoji_jellycolor10_by_justidev"},
     {"title": "✨ Эксклюзивные 2", "short_name": "mainemoji_jellycolor37_by_justidev"},
     {"title": "📦 All in All", "short_name": "mainemoji_jellycolor14_by_justidev"},
+    {"title": "🍹 Секс на пляже", "short_name": "mainemoji_jellycolor51_by_justidev"},
 ]
 
 TEMPLATE_PLACEHOLDER = "jelly"
