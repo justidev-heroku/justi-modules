@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.3.2                     ║
+# ║                        🔮 JellyParser v0.3.3                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.3.2: Авто-разделение паков > 200 эмодзи                        ║
+# ║ v0.3.3: Лимит разделения паков снижен до 180 эмодзи               ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -60,7 +60,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 3, 2)
+__version__ = (0, 3, 3)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -159,28 +159,98 @@ def _ensure_font():
     return None
 
 
-def _collect_path_verts(obj):
+def _collect_path_verts(obj, target=None):
+    if target is None:
+        target = obj
     verts = []
-    def _walk(o):
+    
+    def get_group_transform(grp):
+        items = grp.get("it", grp.get("shapes", []))
+        for item in items:
+            if item.get("ty") == "tr":
+                return item
+        return {}
+
+    def transform_point(x, y, tr):
+        def get_val(prop, default):
+            if not prop:
+                return default
+            k = prop.get("k", default)
+            if isinstance(k, list) and k and isinstance(k[0], dict):
+                val = k[0].get("s", default)
+                if not isinstance(val, list):
+                    val = [val]
+                return val
+            return k
+
+        ak = get_val(tr.get("a"), [0, 0])
+        ax = float(ak[0]) if isinstance(ak, list) and len(ak) >= 1 else 0.0
+        ay = float(ak[1]) if isinstance(ak, list) and len(ak) >= 2 else 0.0
+        
+        sk = get_val(tr.get("s"), [100, 100])
+        sx = float(sk[0]) if isinstance(sk, list) and len(sk) >= 1 else 100.0
+        sy = float(sk[1]) if isinstance(sk, list) and len(sk) >= 2 else 100.0
+        
+        rk = get_val(tr.get("r"), 0.0)
+        if isinstance(rk, list):
+            rk = float(rk[0]) if rk else 0.0
+        else:
+            rk = float(rk)
+            
+        pk = get_val(tr.get("p"), [0, 0])
+        px = float(pk[0]) if isinstance(pk, list) and len(pk) >= 1 else 0.0
+        py = float(pk[1]) if isinstance(pk, list) and len(pk) >= 2 else 0.0
+        
+        x1 = x - ax
+        y1 = y - ay
+        
+        x2 = x1 * (sx / 100.0)
+        y2 = y1 * (sy / 100.0)
+        
+        if rk != 0.0:
+            rad = math.radians(rk)
+            cos_r = math.cos(rad)
+            sin_r = math.sin(rad)
+            x3 = x2 * cos_r - y2 * sin_r
+            y3 = x2 * sin_r + y2 * cos_r
+        else:
+            x3, y3 = x2, y2
+            
+        x4 = x3 + px
+        y4 = y3 + py
+        return x4, y4
+
+    def walk(o, tr_stack):
         if isinstance(o, dict):
-            if o.get("ty") == "sh":
+            ty = o.get("ty")
+            if ty == "gr":
+                new_stack = list(tr_stack)
+                if o is not target:
+                    tr = get_group_transform(o)
+                    if tr:
+                        new_stack.append(tr)
+                items = o.get("it", o.get("shapes", []))
+                for item in items:
+                    if item.get("ty") != "tr":
+                        walk(item, new_stack)
+            elif ty == "sh":
                 ks = o.get("ks", {})
-                def _walk_ks(x):
-                    if isinstance(x, dict):
-                        if "v" in x and isinstance(x["v"], list):
-                            for v in x["v"]:
-                                if isinstance(v, (list, tuple)) and len(v) >= 2:
-                                    verts.append((float(v[0]), float(v[1])))
-                        for val in x.values():
-                            _walk_ks(val)
-                    elif isinstance(x, list):
-                        for item in x:
-                            _walk_ks(item)
-                _walk_ks(ks)
-            for val in o.values(): _walk(val)
+                k = ks.get("k", {})
+                if isinstance(k, dict) and "v" in k:
+                    for v in k["v"]:
+                        tx, ty = float(v[0]), float(v[1])
+                        for tr in reversed(tr_stack):
+                            tx, ty = transform_point(tx, ty, tr)
+                        verts.append((tx, ty))
+            else:
+                for val in o.values():
+                    if isinstance(val, (dict, list)):
+                        walk(val, tr_stack)
         elif isinstance(o, list):
-            for item in o: _walk(item)
-    _walk(obj)
+            for item in o:
+                walk(item, tr_stack)
+
+    walk(obj, [])
     return verts
 
 
@@ -260,7 +330,7 @@ def _is_descendant(child, parent):
 
 
 def _has_keyword_child(obj):
-    keywords = {"textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"}
+    keywords = {"textgroup", "text", "letters", "emoji", "text shape", "emc", "logo", "label", "word", "txt", "title", "caption"}
     todo = [obj]
     while todo:
         o = todo.pop()
@@ -281,7 +351,7 @@ def _has_keyword_child(obj):
 
 
 def _is_keyword_match(el):
-    keywords = {"textgroup", "text", "letters", "emoji", "text shape", "emc", "logo"}
+    keywords = {"textgroup", "text", "letters", "emoji", "text shape", "emc", "logo", "label", "word", "txt", "title", "caption"}
     nm = el.get("nm")
     if isinstance(nm, str) and nm:
         nm_lower = nm.lower()
@@ -311,25 +381,6 @@ def _find_text_targets(lottie):
         final_targets = []
         for cand in named_targets:
             if any(_is_descendant(t, cand) for t in named_targets if t is not cand):
-                continue
-            final_targets.append(cand)
-        return final_targets
-
-    fallback_targets = []
-    for el in elements:
-        ty = el.get("ty")
-        if ty == "gr":
-            nm = el.get("nm")
-            nm_lower = (nm.lower() if isinstance(nm, str) else "")
-            if "user" not in nm_lower:
-                cnsh = _count_paths(el)
-                if 2 <= cnsh <= 15 and _has_fill(el):
-                    fallback_targets.append(el)
-                    
-    if fallback_targets:
-        final_targets = []
-        for cand in fallback_targets:
-            if any(_is_descendant(t, cand) for t in fallback_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets
@@ -889,12 +940,64 @@ def compress_tgs(lottie: dict) -> bytes:
     return compressed
 
 
+def _add_default_text_layer(lottie: dict):
+    max_ind = 0
+    layers = lottie.get("layers", [])
+    for l in layers:
+        ind = l.get("ind", 0)
+        if isinstance(ind, int) and ind > max_ind:
+            max_ind = ind
+    
+    new_layer = {
+        "ty": 5,
+        "nm": "Text 1",
+        "sr": 1,
+        "st": 0,
+        "op": 9999,
+        "ip": 0,
+        "ind": max_ind + 1,
+        "ks": {
+            "a": {"a": 0, "k": [0, 0, 0]},
+            "p": {"a": 0, "k": [256, 420, 0]},
+            "s": {"a": 0, "k": [100, 100, 100]},
+            "r": {"a": 0, "k": 0},
+            "o": {"a": 0, "k": 100}
+        },
+        "t": {
+            "d": {
+                "k": [
+                    {
+                        "s": {
+                            "s": 40,
+                            "f": "Comfortaa-Bold",
+                            "t": "placeholder",
+                            "j": 2,
+                            "tr": 0,
+                            "lh": 48,
+                            "ls": 0,
+                            "fc": [1, 1, 1]
+                        },
+                        "t": 0
+                    }
+                ]
+            }
+        }
+    }
+    layers.append(new_layer)
+
+
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if not font_path:
         font_path = _ensure_font()
     if not font_path:
         return False
     changed = False
+    
+    targets = _find_text_targets(lottie)
+    if not targets:
+        _add_default_text_layer(lottie)
+        changed = True
+        
     bounds = _get_textgroup_bounds(lottie)
     if bounds:
         x1, y1, x2, y2 = bounds
@@ -944,7 +1047,7 @@ def _get_partition_short_name(short_name: str, n: int) -> str:
 
 
 async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji):
-    limit = 200 if is_emoji else 120
+    limit = 180 if is_emoji else 120
     chunks = [stickers[i:i + limit] for i in range(0, len(stickers), limit)]
     created_names = []
 
@@ -1136,9 +1239,12 @@ class JellyParserMod(loader.Module):
                 raw = await download_cached(self._client, doc)
                 decompressed = gzip.decompress(raw)
                 lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
-                bounds = _get_textgroup_bounds(lottie_obj)
                 
                 targets = _find_text_targets(lottie_obj)
+                if not targets:
+                    _add_default_text_layer(lottie_obj)
+                
+                bounds = _get_textgroup_bounds(lottie_obj)
                 target_info = f"Target types: {[t.get('ty') for t in targets]}" if targets else "None"
                 debug_logs.append(f"Doc {i} ({getattr(doc, 'id', 'unknown')}): bounds={bounds}, targets={target_info}")
                 

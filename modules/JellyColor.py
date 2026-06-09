@@ -887,22 +887,100 @@ def _ensure_font():
 
 
 
-def _collect_path_verts(obj):
+def _collect_path_verts(obj, target=None):
+    if target is None:
+        target = obj
     verts = []
-    def _walk(o):
+    
+    def get_group_transform(grp):
+        items = grp.get("it", grp.get("shapes", []))
+        for item in items:
+            if item.get("ty") == "tr":
+                return item
+        return {}
+
+    def transform_point(x, y, tr):
+        def get_val(prop, default):
+            if not prop:
+                return default
+            k = prop.get("k", default)
+            if isinstance(k, list) and k and isinstance(k[0], dict):
+                val = k[0].get("s", default)
+                if not isinstance(val, list):
+                    val = [val]
+                return val
+            return k
+
+        ak = get_val(tr.get("a"), [0, 0])
+        ax = float(ak[0]) if isinstance(ak, list) and len(ak) >= 1 else 0.0
+        ay = float(ak[1]) if isinstance(ak, list) and len(ak) >= 2 else 0.0
+        
+        sk = get_val(tr.get("s"), [100, 100])
+        sx = float(sk[0]) if isinstance(sk, list) and len(sk) >= 1 else 100.0
+        sy = float(sk[1]) if isinstance(sk, list) and len(sk) >= 2 else 100.0
+        
+        rk = get_val(tr.get("r"), 0.0)
+        if isinstance(rk, list):
+            rk = float(rk[0]) if rk else 0.0
+        else:
+            rk = float(rk)
+            
+        pk = get_val(tr.get("p"), [0, 0])
+        px = float(pk[0]) if isinstance(pk, list) and len(pk) >= 1 else 0.0
+        py = float(pk[1]) if isinstance(pk, list) and len(pk) >= 2 else 0.0
+        
+        x1 = x - ax
+        y1 = y - ay
+        
+        x2 = x1 * (sx / 100.0)
+        y2 = y1 * (sy / 100.0)
+        
+        if rk != 0.0:
+            rad = math.radians(rk)
+            cos_r = math.cos(rad)
+            sin_r = math.sin(rad)
+            x3 = x2 * cos_r - y2 * sin_r
+            y3 = x2 * sin_r + y2 * cos_r
+        else:
+            x3, y3 = x2, y2
+            
+        x4 = x3 + px
+        y4 = y3 + py
+        return x4, y4
+
+    def walk(o, tr_stack):
         if isinstance(o, dict):
-            if o.get("ty") == "sh":
-                k = o.get("ks", {}).get("k", {})
+            ty = o.get("ty")
+            if ty == "gr":
+                new_stack = list(tr_stack)
+                if o is not target:
+                    tr = get_group_transform(o)
+                    if tr:
+                        new_stack.append(tr)
+                items = o.get("it", o.get("shapes", []))
+                for item in items:
+                    if item.get("ty") != "tr":
+                        walk(item, new_stack)
+            elif ty == "sh":
+                ks = o.get("ks", {})
+                k = ks.get("k", {})
                 if isinstance(k, list) and k and isinstance(k[0], dict):
                     k = k[0].get("s", k[0])
-                if isinstance(k, dict):
-                    for v in k.get("v", []):
-                        if isinstance(v, (list, tuple)) and len(v) >= 2:
-                            verts.append((float(v[0]), float(v[1])))
-            for val in o.values(): _walk(val)
+                if isinstance(k, dict) and "v" in k:
+                    for v in k["v"]:
+                        tx, ty = float(v[0]), float(v[1])
+                        for tr in reversed(tr_stack):
+                            tx, ty = transform_point(tx, ty, tr)
+                        verts.append((tx, ty))
+            else:
+                for val in o.values():
+                    if isinstance(val, (dict, list)):
+                        walk(val, tr_stack)
         elif isinstance(o, list):
-            for item in o: _walk(item)
-    _walk(obj)
+            for item in o:
+                walk(item, tr_stack)
+
+    walk(obj, [])
     return verts
 
 
@@ -913,77 +991,85 @@ def _verts_to_bounds(verts):
 
 
 def _get_textgroup_bounds(lottie):
-    def find_named(obj):
-        if isinstance(obj, dict):
-            if obj.get("ty")=="gr" and obj.get("nm")=="TextGroup":
-                b=_verts_to_bounds(_collect_path_verts(obj))
-                if b: return b
-            for v in obj.values():
-                r=find_named(v)
-                if r: return r
-        elif isinstance(obj, list):
-            for item in obj:
-                r=find_named(item)
-                if r: return r
-        return None
-    b=find_named(lottie)
-    if b: return b
+    keywords = {"textgroup", "text", "letters", "emoji", "text shape", "emc", "logo", "label", "word", "txt", "title", "caption"}
+    
+    def matches(name):
+        if not name or not isinstance(name, str):
+            return False
+        nm_lower = name.lower()
+        return "user" not in nm_lower and any(kw in nm_lower for kw in keywords)
 
-    def find_text_layer(layers):
-        for layer in layers:
-            if layer.get("ty")!=4: continue
-            nm=layer.get("nm",""); shapes=layer.get("shapes",[])
-            n_sh=sum(1 for s in shapes if s.get("ty")=="sh")
-            has_fl=any(s.get("ty")=="fl" for s in shapes)
-            if ("text" in nm.lower() or "Text" in nm) and n_sh>=2 and has_fl:
-                b=_verts_to_bounds(_collect_path_verts({"shapes":shapes}))
-                if b: return b
-        return None
+    elements = []
+    todo = []
+    if "layers" in lottie:
+        todo.extend(lottie["layers"])
+    if "assets" in lottie:
+        for a in lottie["assets"]:
+            if "layers" in a:
+                todo.extend(a["layers"])
+    
+    while todo:
+        el = todo.pop()
+        elements.append(el)
+        sh = el.get("shapes")
+        if sh: todo.extend(sh)
+        it = el.get("it")
+        if it: todo.extend(it)
 
-    all_ll=[lottie.get("layers",[])]+[a.get("layers",[]) for a in lottie.get("assets",[])]
-    for ll in all_ll:
-        b=find_text_layer(ll)
-        if b: return b
+    # 1. Look for type 5 text layers
+    text_layers = [el for el in elements if el.get("ty") == 5]
+    if text_layers:
+        target = text_layers[0]
+        pos = target.get("ks", {}).get("p", {}).get("k", [0, 0])
+        if isinstance(pos, list) and pos and isinstance(pos[0], dict):
+            pos = pos[0].get("s", [0, 0])
+        cx, cy = (pos[0], pos[1]) if (isinstance(pos, list) and len(pos) >= 2) else (0.0, 0.0)
+        font_size = 50.0
+        max_width = 512.0
+        return (cx - max_width / 2.0, cy - font_size / 2.0, cx + max_width / 2.0, cy + font_size / 2.0)
 
-    def _gfl(gr): return any(x.get("ty")=="fl" for x in gr.get("it",[]))
-    def _cdsh(gr): return sum(1 for x in gr.get("it",[]) if x.get("ty")=="sh")
-    def _cnsh(gr):
-        n=0
-        for x in gr.get("it",[]):
-            n+=1 if x.get("ty")=="sh" else (_cnsh(x) if x.get("ty")=="gr" else 0)
-        return n
+    def is_descendant(child, parent):
+        td = []
+        if "shapes" in parent: td.extend(parent["shapes"])
+        if "it" in parent: td.extend(parent["it"])
+        while td:
+            o = td.pop()
+            if o is child: return True
+            sh = o.get("shapes")
+            if sh: td.extend(sh)
+            it = o.get("it")
+            if it: td.extend(it)
+        return False
 
-    matched = []
-    def walk(obj, path=()):
-        if isinstance(obj, dict):
-            if obj.get("ty")=="gr" and _gfl(obj) and (_cdsh(obj)==0 or _cdsh(obj)>=3) and _cnsh(obj)>=3:
-                matched.append((obj, path))
-            for k, v in obj.items():
-                walk(v, path + (k,))
-        elif isinstance(obj, list):
-            for i, x in enumerate(obj):
-                walk(x, path + (i,))
+    # 2. Look for named targets matching keywords
+    named_targets = []
+    for el in elements:
+        ty = el.get("ty")
+        if ty == "gr" and matches(el.get("nm")):
+            cnt = 0
+            t_todo = [el]
+            while t_todo:
+                o = t_todo.pop()
+                if isinstance(o, dict):
+                    if o.get("ty") == "sh": cnt += 1
+                    for v in o.values():
+                        if isinstance(v, (dict, list)): t_todo.append(v)
+                elif isinstance(o, list):
+                    for item in o:
+                        if isinstance(item, (dict, list)): t_todo.append(item)
+            if cnt >= 1:
+                named_targets.append(el)
 
-    walk(lottie)
-
-    filtered_matched = []
-    for gr1, p1 in matched:
-        is_ancestor = False
-        for gr2, p2 in matched:
-            if len(p1) < len(p2) and p2[:len(p1)] == p1:
-                is_ancestor = True
-                break
-        if not is_ancestor:
-            filtered_matched.append(gr1)
-
-    for gr in filtered_matched:
-        verts = _collect_path_verts(gr)
-        if verts:
-            xs=[v[0] for v in verts]; ys=[v[1] for v in verts]
-            w=max(xs)-min(xs); h=max(ys)-min(ys)+1e-9
-            if w>h*1.3 or w>0:
-                b = _verts_to_bounds(verts)
-                if b: return b
+    if named_targets:
+        final_targets = []
+        for cand in named_targets:
+            if any(is_descendant(t, cand) for t in named_targets if t is not cand):
+                continue
+            final_targets.append(cand)
+        if final_targets:
+            verts = _collect_path_verts(final_targets[0])
+            if verts:
+                return _verts_to_bounds(verts)
 
     return None
 
@@ -1104,14 +1190,32 @@ def _replace_textgroup(lottie, new_shapes):
     if patched_any:
         return True
 
-    # 2. Try to find by shape layers containing "text" in name
+    # 2. Try to find by shape layers containing "text" in name or type 5 layers
     def try_ll(layers):
+        nonlocal patched_any
         for layer in layers:
-            if layer.get("ty")!=4: continue
-            shapes=layer.get("shapes",[]); nm=layer.get("nm","")
+            ty = layer.get("ty")
+            if ty not in (4, 5): continue
+            nm=layer.get("nm","")
             if not isinstance(nm, str): continue
             nm_lower = nm.lower()
             if "user" in nm_lower: continue
+            
+            if ty == 5:
+                layer["ty"] = 4
+                layer.pop("t", None)
+                style = {
+                    "ty": "fl",
+                    "c": {"a": 0, "k": [1, 1, 1, 1]},
+                    "o": {"a": 0, "k": 100},
+                    "r": 1,
+                    "nm": "Fill 1"
+                }
+                layer["shapes"] = new_shapes + [style]
+                patched_any = True
+                continue
+                
+            shapes=layer.get("shapes",[]); nm=layer.get("nm","")
             n=sum(1 for s in shapes if s.get("ty")=="sh")
             fl=any(s.get("ty")=="fl" for s in shapes)
             if ("text" in nm_lower and n>=2 and fl) or (n>=3 and fl):
@@ -1347,12 +1451,65 @@ def _set_text_neon_style(lottie: dict, stroke_hex: str) -> None:
     _walk(lottie)
 
 
+def _add_default_text_layer(lottie: dict):
+    max_ind = 0
+    layers = lottie.get("layers", [])
+    for l in layers:
+        ind = l.get("ind", 0)
+        if isinstance(ind, int) and ind > max_ind:
+            max_ind = ind
+    
+    new_layer = {
+        "ty": 5,
+        "nm": "Text 1",
+        "sr": 1,
+        "st": 0,
+        "op": 9999,
+        "ip": 0,
+        "ind": max_ind + 1,
+        "ks": {
+            "a": {"a": 0, "k": [0, 0, 0]},
+            "p": {"a": 0, "k": [256, 420, 0]},
+            "s": {"a": 0, "k": [100, 100, 100]},
+            "r": {"a": 0, "k": 0},
+            "o": {"a": 0, "k": 100}
+        },
+        "t": {
+            "d": {
+                "k": [
+                    {
+                        "s": {
+                            "s": 40,
+                            "f": "Comfortaa-Bold",
+                            "t": "placeholder",
+                            "j": 2,
+                            "tr": 0,
+                            "lh": 48,
+                            "ls": 0,
+                            "fc": [1, 1, 1]
+                        },
+                        "t": 0
+                    }
+                ]
+            }
+        }
+    }
+    layers.append(new_layer)
+
+
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None, scale_factor: float = 1.0) -> bool:
     if not font_path:
         font_path=_ensure_font()
     if not font_path: return False
     changed=False
+    
+    # Check bounds. If not found, add default text layer!
     bounds=_get_textgroup_bounds(lottie)
+    if not bounds:
+        _add_default_text_layer(lottie)
+        bounds=_get_textgroup_bounds(lottie)
+        changed=True
+        
     if bounds:
         x1,y1,x2,y2=bounds; cx=(x1+x2)/2; cy=(y1+y2)/2
         h = max(abs(y2-y1), 5.) * scale_factor
