@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.4.2                     ║
+# ║                        🎨 JellyColor v4.4.3                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.4.2: эксклюзивные 2 пак, авто-разделение паков > 200 эмодзи   ║
+# ║  v4.4.3: fix bool is not iterable (always_allow callback crash)  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 4, 2)
+__version__ = (4, 4, 3)
 
 import asyncio
 import glob
@@ -1460,8 +1460,15 @@ def _get_partition_short_name(short_name: str, n: int) -> str:
     return f"{short_name}_v{n}"
 
 
+def _get_bot_suffix(me):
+    """Возвращает безопасный суффикс для short_name пака (username или числовой id)."""
+    if me.username and re.fullmatch(r'[a-zA-Z0-9_]+', me.username):
+        return me.username
+    return str(me.id)
+
+
 async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, exists_mode="recreate"):
-    limit = 200 if is_emoji else 120
+    limit = 180 if is_emoji else 120
     chunks = [stickers[i:i + limit] for i in range(0, len(stickers), limit)]
     created_names = []
 
@@ -1493,11 +1500,14 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
                         return None, f"Не удалось перезаписать пак {curr_short}: {del_err}"
                 else:
                     try:
-                        for sticker in chunk:
-                            await client(functions.stickers.AddStickerToSetRequest(
-                                stickerset=types.InputStickerSetShortName(short_name=curr_short),
-                                sticker=sticker
-                            ))
+                        add_sem = asyncio.Semaphore(10)
+                        async def _add_one(sticker):
+                            async with add_sem:
+                                await client(functions.stickers.AddStickerToSetRequest(
+                                    stickerset=types.InputStickerSetShortName(short_name=curr_short),
+                                    sticker=sticker
+                                ))
+                        await asyncio.gather(*[_add_one(s) for s in chunk])
                         created_names.append(curr_short)
                     except Exception as add_err:
                         logger.exception(f"Failed to append stickers to existing stickerpack {curr_short}")
@@ -1666,6 +1676,16 @@ class JellyColorMod(loader.Module):
 
     # ─── Shared color/gradient UI helpers ────────────────────────────────────
 
+    @staticmethod
+    def _patch_allow(rows, uid):
+        """Inject always_allow=[uid] into every callback button to prevent
+        Heroku's 'argument of type bool is not iterable' crash."""
+        for row in rows:
+            for btn in row:
+                if "callback" in btn and "always_allow" not in btn:
+                    btn["always_allow"] = [uid]
+        return rows
+
     def _gradient_menu_text(self) -> str:
         user_gradients = self.db.get("JellyColor", "user_gradients", [])
         all_grads = GRADIENT_PRESETS + user_gradients
@@ -1732,7 +1752,7 @@ class JellyColorMod(loader.Module):
             "scope":None,"color":None,"gradient":None,"pack_name":None,
             "step":"scope" if pc>1 else "color"}
         await message.delete()
-        await self.inline.form(text=self._j_text(uid),reply_markup=self._j_markup(uid),message=message)
+        await self.inline.form(text=self._j_text(uid),reply_markup=self._j_markup(uid),message=message,always_allow=[uid])
 
     def _j_text(self,uid):
         s=self._sessions[uid]; step=s["step"]
@@ -1756,6 +1776,9 @@ class JellyColorMod(loader.Module):
         return pe("⏰",PE["clock"])+" <b>Перекрашиваю...</b>"
 
     def _j_markup(self,uid):
+        return self._patch_allow(self.__j_markup_inner(uid), uid)
+
+    def __j_markup_inner(self,uid):
         s=self._sessions[uid]; step=s["step"]
         pc = s.get("pack_count", 1)
         if step=="scope": return [[
@@ -1923,7 +1946,7 @@ class JellyColorMod(loader.Module):
         c=value.strip().lower()
         if not validate_short_name(c): await call.answer("Только a-z,0-9,_",show_alert=True); return
         me=await self._client.get_me()
-        pname=c+"_by_"+(me.username or "userbot")
+        pname=c+"_by_"+_get_bot_suffix(me)
         s["pack_name"]=pname
         
         # Check if pack already exists
@@ -2077,7 +2100,7 @@ class JellyColorMod(loader.Module):
             uploaded=await self._client.upload_file(buf,file_name=buf.name)
             is_emoji=(tt=="emoji")
             item=await _upload_item(self._client,mee,uploaded,mime,es,is_emoji)
-            sn="jc"+hc[1:].lower()+"_by_"+(me.username or "userbot")
+            sn="jc"+hc[1:].lower()+"_by_"+_get_bot_suffix(me)
             final_name,err=await _safe_create_set(self._client,me.id,"JellyColor "+hc,sn,[item],is_emoji)
             if err: raise ValueError(err)
             final_name_str = final_name[0] if isinstance(final_name, list) else final_name
@@ -2098,7 +2121,7 @@ class JellyColorMod(loader.Module):
         self._tsessions[uid]={"ts":time.time(),"step":"template","template":None,"text":None,
                                "color":None,"pack_name":None,"preview_msg":None, "scale_factor": 0.8}
         await message.delete()
-        await self.inline.form(text=self._jt_text(uid),reply_markup=self._jt_markup(uid),message=message)
+        await self.inline.form(text=self._jt_text(uid),reply_markup=self._jt_markup(uid),message=message,always_allow=[uid])
     def _jt_text(self, uid):
         s=self._tsessions[uid]; step=s["step"]
         if step=="template": return pe("🖤",PE["brush"])+" <b>Выберите шаблон</b>\n\nТекст <code>"+TEMPLATE_PLACEHOLDER+"</code> будет заменён на ваш."
@@ -2126,6 +2149,9 @@ class JellyColorMod(loader.Module):
         return pe("⏰",PE["clock"])+" <b>Создаём...</b>"
 
     def _jt_markup(self,uid):
+        return self._patch_allow(self.__jt_markup_inner(uid), uid)
+
+    def __jt_markup_inner(self,uid):
         s=self._tsessions[uid]; step=s["step"]
         if step=="template": return [[{"text":t["title"],"icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"],
             "style":"primary","callback":self._jt_tmpl,"args":(uid,i)}] for i,t in enumerate(TEMPLATE_SETS)]
@@ -2494,7 +2520,7 @@ class JellyColorMod(loader.Module):
         c=value.strip().lower()
         if not validate_short_name(c): await call.answer("Только a-z,0-9,_",show_alert=True); return
         me=await self._client.get_me()
-        pname=c+"_by_"+(me.username or "userbot")
+        pname=c+"_by_"+_get_bot_suffix(me)
         s["pack_name"]=pname
         
         # Check if pack already exists
