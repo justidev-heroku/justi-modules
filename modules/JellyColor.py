@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.4.5                     ║
+# ║                        🎨 JellyColor v4.4.6                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.4.5: install updates using built-in .dlm command            ║
+# ║  v4.4.6: Удалена встроенная команда jupdate                      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 4, 5)
+__version__ = (4, 4, 6)
 
 import asyncio
 import glob
