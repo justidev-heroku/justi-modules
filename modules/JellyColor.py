@@ -63,6 +63,7 @@ from telethon.tl.types import (
     Message,
     MessageEntityCustomEmoji,
 )
+from telethon.errors import FloodWaitError
 
 try:
     from fontTools.ttLib import TTFont
@@ -80,6 +81,16 @@ try:
     HAS_ORJSON = True
 except ImportError:
     HAS_ORJSON = False
+
+_FONT_CACHE = {}
+
+
+def _get_cached_font(font_path: str):
+    ft = _FONT_CACHE.get(font_path)
+    if ft is None:
+        ft = TTFont(font_path)
+        _FONT_CACHE[font_path] = ft
+    return ft
 
 
 def json_loads(data: bytes) -> dict:
@@ -783,7 +794,7 @@ async def download_cached(client, doc) -> bytes:
 
 def compress_tgs(lottie: dict) -> bytes:
     raw = json_dumps(lottie)
-    compressed = gzip.compress(raw, compresslevel=3)
+    compressed = gzip.compress(raw, compresslevel=6)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
 
@@ -798,7 +809,7 @@ def compress_tgs(lottie: dict) -> bytes:
                 _strip_names(item)
     _strip_names(lottie)
     raw = json_dumps(lottie)
-    compressed = gzip.compress(raw, compresslevel=3)
+    compressed = gzip.compress(raw, compresslevel=6)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
 
@@ -814,7 +825,7 @@ def compress_tgs(lottie: dict) -> bytes:
         return obj
     _round_floats(lottie, 2)
     raw = json_dumps(lottie)
-    compressed = gzip.compress(raw, compresslevel=3)
+    compressed = gzip.compress(raw, compresslevel=6)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
 
@@ -1079,7 +1090,12 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     if not HAS_FONTTOOLS:
         logger.error("fontTools: package not found")
         return []
-    ft=TTFont(font_path); gs=ft.getGlyphSet(); cm=ft.getBestCmap() or {}
+    try:
+        ft = _get_cached_font(font_path)
+    except Exception as e:
+        logger.error(f"fontTools: failed to load font {font_path}: {e}")
+        return []
+    gs=ft.getGlyphSet(); cm=ft.getBestCmap() or {}
     upm=ft["head"].unitsPerEm
     os2=ft.get("OS/2")
     cap_h=float(getattr(os2,"sCapHeight",0) or getattr(os2,"sTypoAscender",upm*0.72))
@@ -1807,13 +1823,12 @@ class JellyColorMod(loader.Module):
                     async with sem:
                         item=await fn(i,doc)
                     break
+                except FloodWaitError as e:
+                    wait = getattr(e, "seconds", None) or 5 * (attempt + 1)
+                    log.warning(f"_parallel FloodWait item {i}, sleeping {wait}s")
+                    await asyncio.sleep(wait)
                 except Exception as e:
-                    err=str(e)
-                    if "FloodWait" in err or "flood" in err.lower():
-                        wait=5*(attempt+1)
-                        log.warning(f"_parallel FloodWait item {i}, sleeping {wait}s")
-                        await asyncio.sleep(wait)
-                    elif attempt<retries-1:
+                    if attempt<retries-1:
                         log.warning(f"_parallel item {i} attempt {attempt+1} failed: {e}")
                         await asyncio.sleep(1)
                     else:
