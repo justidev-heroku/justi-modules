@@ -1582,10 +1582,3 @@ class JellyParserMod(loader.Module):
                 log_info = ""
             await status_msg.edit(pe("❌", PE["err"]) + f" Не удалось создать набор: <code>{e}</code>{log_info}", parse_mode="HTML")
 
-    @loader.command()
-    async def jupd(self, message: Message):
-        """Обновить модуль JellyParser"""
-        msg = await utils.answer(message, pe("⏰", PE["clock"]) + " Обновляем JellyParser...", parse_mode="HTML")
-        url_parser = "https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/modules/JellyParser.py"
-        await self._client.send_message(message.chat_id, f".dlm {url_parser}")
-        await msg.delete()
