@@ -1460,8 +1460,15 @@ def _get_partition_short_name(short_name: str, n: int) -> str:
     return f"{short_name}_v{n}"
 
 
+def _get_bot_suffix(me):
+    """Возвращает безопасный суффикс для short_name пака (username или числовой id)."""
+    if me.username and re.fullmatch(r'[a-zA-Z0-9_]+', me.username):
+        return me.username
+    return str(me.id)
+
+
 async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, exists_mode="recreate"):
-    limit = 200 if is_emoji else 120
+    limit = 180 if is_emoji else 120
     chunks = [stickers[i:i + limit] for i in range(0, len(stickers), limit)]
     created_names = []
 
@@ -1493,11 +1500,14 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
                         return None, f"Не удалось перезаписать пак {curr_short}: {del_err}"
                 else:
                     try:
-                        for sticker in chunk:
-                            await client(functions.stickers.AddStickerToSetRequest(
-                                stickerset=types.InputStickerSetShortName(short_name=curr_short),
-                                sticker=sticker
-                            ))
+                        add_sem = asyncio.Semaphore(10)
+                        async def _add_one(sticker):
+                            async with add_sem:
+                                await client(functions.stickers.AddStickerToSetRequest(
+                                    stickerset=types.InputStickerSetShortName(short_name=curr_short),
+                                    sticker=sticker
+                                ))
+                        await asyncio.gather(*[_add_one(s) for s in chunk])
                         created_names.append(curr_short)
                     except Exception as add_err:
                         logger.exception(f"Failed to append stickers to existing stickerpack {curr_short}")
@@ -1936,7 +1946,7 @@ class JellyColorMod(loader.Module):
         c=value.strip().lower()
         if not validate_short_name(c): await call.answer("Только a-z,0-9,_",show_alert=True); return
         me=await self._client.get_me()
-        pname=c+"_by_"+(me.username or "userbot")
+        pname=c+"_by_"+_get_bot_suffix(me)
         s["pack_name"]=pname
         
         # Check if pack already exists
@@ -2090,7 +2100,7 @@ class JellyColorMod(loader.Module):
             uploaded=await self._client.upload_file(buf,file_name=buf.name)
             is_emoji=(tt=="emoji")
             item=await _upload_item(self._client,mee,uploaded,mime,es,is_emoji)
-            sn="jc"+hc[1:].lower()+"_by_"+(me.username or "userbot")
+            sn="jc"+hc[1:].lower()+"_by_"+_get_bot_suffix(me)
             final_name,err=await _safe_create_set(self._client,me.id,"JellyColor "+hc,sn,[item],is_emoji)
             if err: raise ValueError(err)
             final_name_str = final_name[0] if isinstance(final_name, list) else final_name
@@ -2510,7 +2520,7 @@ class JellyColorMod(loader.Module):
         c=value.strip().lower()
         if not validate_short_name(c): await call.answer("Только a-z,0-9,_",show_alert=True); return
         me=await self._client.get_me()
-        pname=c+"_by_"+(me.username or "userbot")
+        pname=c+"_by_"+_get_bot_suffix(me)
         s["pack_name"]=pname
         
         # Check if pack already exists
