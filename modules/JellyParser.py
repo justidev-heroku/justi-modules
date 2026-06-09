@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.3.5                     ║
+# ║                        🔮 JellyParser v0.3.6                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.3.5: Автоконтраст текста + .jupd команда обновления            ║
+# ║ v0.3.6: Оптимизации + Очистка SVG-логотипов + .jupd               ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -42,6 +42,7 @@ import time
 import urllib.request
 from telethon import functions, types
 from telethon.tl.types import DocumentAttributeCustomEmoji, DocumentAttributeSticker, Message
+from telethon.errors import FloodWaitError
 
 from .. import loader, utils
 
@@ -60,7 +61,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 3, 5)
+__version__ = (0, 3, 6)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -105,6 +106,15 @@ _FONT_CDN_URL = (
     "https://raw.githubusercontent.com/googlefonts/comfortaa/master/"
     "fonts/TTF/Comfortaa-Bold.ttf"
 )
+_FONT_CACHE = {}
+
+
+def _get_cached_font(font_path: str):
+    ft = _FONT_CACHE.get(font_path)
+    if ft is None:
+        ft = TTFont(font_path)
+        _FONT_CACHE[font_path] = ft
+    return ft
 
 
 def pe(emoji: str, eid: str) -> str:
@@ -393,7 +403,11 @@ def _get_textgroup_bounds(lottie):
     if targets:
         target = targets[0]
         if target.get("ty") == 5:
-            cx, cy = 0.0, 0.0
+            pk = target.get("ks", {}).get("p", {}).get("k", [256.0, 420.0, 0.0])
+            if isinstance(pk, list) and len(pk) >= 2:
+                cx, cy = float(pk[0]), float(pk[1])
+            else:
+                cx, cy = 256.0, 420.0
             font_size = 50.0
             max_width = 512.0
             return (cx - max_width / 2.0, cy - font_size / 2.0, cx + max_width / 2.0, cy + font_size / 2.0)
@@ -408,7 +422,12 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     if not HAS_FONTTOOLS:
         logger.error("fontTools: package not found")
         return []
-    ft=TTFont(font_path); gs=ft.getGlyphSet(); cm=ft.getBestCmap() or {}
+    try:
+        ft = _get_cached_font(font_path)
+    except Exception as e:
+        logger.error(f"fontTools: failed to load font {font_path}: {e}")
+        return []
+    gs=ft.getGlyphSet(); cm=ft.getBestCmap() or {}
     upm=ft["head"].unitsPerEm
     os2=ft.get("OS/2")
     cap_h=float(getattr(os2,"sCapHeight",0) or getattr(os2,"sTypoAscender",upm*0.72))
@@ -927,7 +946,7 @@ def json_dumps(obj: dict) -> bytes:
 
 def compress_tgs(lottie: dict) -> bytes:
     raw = json_dumps(lottie)
-    compressed = gzip.compress(raw, compresslevel=3)
+    compressed = gzip.compress(raw, compresslevel=6)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
 
@@ -942,7 +961,7 @@ def compress_tgs(lottie: dict) -> bytes:
                 _strip_names(item)
     _strip_names(lottie)
     raw = json_dumps(lottie)
-    compressed = gzip.compress(raw, compresslevel=3)
+    compressed = gzip.compress(raw, compresslevel=6)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
 
@@ -958,7 +977,7 @@ def compress_tgs(lottie: dict) -> bytes:
         return obj
     _round_floats(lottie, 2)
     raw = json_dumps(lottie)
-    compressed = gzip.compress(raw, compresslevel=3)
+    compressed = gzip.compress(raw, compresslevel=6)
     if len(compressed) <= MAX_TGS_SIZE:
         return compressed
 
@@ -1027,6 +1046,125 @@ def _add_default_text_layer(lottie: dict):
     layers.append(new_layer)
 
 
+def _remove_logo_elements(lottie: dict) -> bool:
+    """
+    Удаляет SVG-логотипы и водяные знаки из Lottie JSON.
+    Ищет слои и группы фигур с именами, содержащими ключевые слова:
+    'logo', 'лого', 'sod', 'svg_outline', 'svg_item'.
+    """
+    removed = False
+    
+    def clean_shapes_recursive(shapes_list):
+        nonlocal removed
+        if not isinstance(shapes_list, list):
+            return
+        i = 0
+        while i < len(shapes_list):
+            item = shapes_list[i]
+            if not isinstance(item, dict):
+                i += 1
+                continue
+            nm = item.get("nm", "")
+            nm_lower = nm.lower() if isinstance(nm, str) else ""
+            
+            is_logo = False
+            for kw in ["logo", "лого", "sod", "svg_outline", "svg_item"]:
+                if kw in nm_lower:
+                    is_logo = True
+                    break
+            if is_logo:
+                shapes_list.pop(i)
+                removed = True
+                continue
+            
+            if "it" in item:
+                clean_shapes_recursive(item["it"])
+            if "shapes" in item:
+                clean_shapes_recursive(item["shapes"])
+            i += 1
+
+    layers = lottie.get("layers", [])
+    new_layers = []
+    for l in layers:
+        nm = l.get("nm", "")
+        nm_lower = nm.lower() if isinstance(nm, str) else ""
+        is_logo = False
+        for kw in ["logo", "лого", "sod", "svg_outline", "svg_item"]:
+            if kw in nm_lower:
+                is_logo = True
+                break
+        if is_logo:
+            removed = True
+        else:
+            if "shapes" in l:
+                clean_shapes_recursive(l["shapes"])
+            new_layers.append(l)
+    lottie["layers"] = new_layers
+    
+    for asset in lottie.get("assets", []):
+        alayers = asset.get("layers", [])
+        new_alayers = []
+        for l in alayers:
+            nm = l.get("nm", "")
+            nm_lower = nm.lower() if isinstance(nm, str) else ""
+            is_logo = False
+            for kw in ["logo", "лого", "sod", "svg_outline", "svg_item"]:
+                if kw in nm_lower:
+                    is_logo = True
+                    break
+            if is_logo:
+                removed = True
+            else:
+                if "shapes" in l:
+                    clean_shapes_recursive(l["shapes"])
+                new_alayers.append(l)
+        asset["layers"] = new_alayers
+        
+    return removed
+
+
+def _has_logo_elements(lottie: dict) -> bool:
+    """
+    Проверяет, содержит ли Lottie JSON водяные знаки или логотипы.
+    """
+    def check_shapes(shapes_list):
+        if not isinstance(shapes_list, list):
+            return False
+        for item in shapes_list:
+            if not isinstance(item, dict):
+                continue
+            nm = item.get("nm", "")
+            nm_lower = nm.lower() if isinstance(nm, str) else ""
+            for kw in ["logo", "лого", "sod", "svg_outline", "svg_item"]:
+                if kw in nm_lower:
+                    return True
+            if "it" in item and check_shapes(item["it"]):
+                return True
+            if "shapes" in item and check_shapes(item["shapes"]):
+                return True
+        return False
+
+    for l in lottie.get("layers", []):
+        nm = l.get("nm", "")
+        nm_lower = nm.lower() if isinstance(nm, str) else ""
+        for kw in ["logo", "лого", "sod", "svg_outline", "svg_item"]:
+            if kw in nm_lower:
+                return True
+        if "shapes" in l and check_shapes(l["shapes"]):
+            return True
+            
+    for asset in lottie.get("assets", []):
+        for l in asset.get("layers", []):
+            nm = l.get("nm", "")
+            nm_lower = nm.lower() if isinstance(nm, str) else ""
+            for kw in ["logo", "лого", "sod", "svg_outline", "svg_item"]:
+                if kw in nm_lower:
+                    return True
+            if "shapes" in l and check_shapes(l["shapes"]):
+                return True
+    return False
+
+
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if not font_path:
         font_path = _ensure_font()
@@ -1034,6 +1172,9 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
         return False
     changed = False
     
+    if _remove_logo_elements(lottie):
+        changed = True
+        
     targets = _find_text_targets(lottie)
     if not targets:
         _add_default_text_layer(lottie)
@@ -1087,7 +1228,7 @@ def _get_partition_short_name(short_name: str, n: int) -> str:
     return f"{short_name}_v{n}"
 
 
-async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji):
+async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, replace_existing: bool = True):
     limit = 180 if is_emoji else 120
     chunks = [stickers[i:i + limit] for i in range(0, len(stickers), limit)]
     created_names = []
@@ -1118,28 +1259,43 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji):
             except Exception as e:
                 err_msg = str(e).lower()
                 if "already exists" in err_msg or "already_exists" in err_msg:
-                    try:
-                        fs = await client(functions.messages.GetStickerSetRequest(
-                            stickerset=types.InputStickerSetShortName(short_name=sn_to_try), hash=0
-                        ))
-                        old_docs = fs.documents
-                        
-                        for sticker in chunk:
-                            await client(functions.stickers.AddStickerToSetRequest(
-                                stickerset=types.InputStickerSetShortName(short_name=sn_to_try),
-                                sticker=sticker
+                    if replace_existing:
+                        try:
+                            await client(functions.stickers.DeleteStickerSetRequest(
+                                stickerset=types.InputStickerSetShortName(short_name=sn_to_try)
                             ))
-                        
-                        for doc in old_docs:
-                            await client(functions.stickers.RemoveStickerFromSetRequest(
-                                sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
+                            await client(functions.stickers.CreateStickerSetRequest(
+                                user_id=uid, title=curr_title, short_name=sn_to_try, stickers=chunk, emojis=is_emoji,
                             ))
-                        created_names.append(sn_to_try)
-                        success = True
-                        break
-                    except Exception as add_err:
-                        if fallback_idx == 2:
-                            return None, f"Не удалось перезаписать пак {sn_to_try}: {add_err}"
+                            created_names.append(sn_to_try)
+                            success = True
+                            break
+                        except Exception as add_err:
+                            if fallback_idx == 2:
+                                return None, f"Не удалось перезаписать пак {sn_to_try}: {add_err}"
+                    else:
+                        try:
+                            fs = await client(functions.messages.GetStickerSetRequest(
+                                stickerset=types.InputStickerSetShortName(short_name=sn_to_try), hash=0
+                            ))
+                            old_docs = fs.documents
+                            
+                            for sticker in chunk:
+                                await client(functions.stickers.AddStickerToSetRequest(
+                                    stickerset=types.InputStickerSetShortName(short_name=sn_to_try),
+                                    sticker=sticker
+                                ))
+                            
+                            for doc in old_docs:
+                                await client(functions.stickers.RemoveStickerFromSetRequest(
+                                    sticker=types.InputDocument(id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference)
+                                ))
+                            created_names.append(sn_to_try)
+                            success = True
+                            break
+                        except Exception as add_err:
+                            if fallback_idx == 2:
+                                return None, f"Не удалось перезаписать пак {sn_to_try}: {add_err}"
                 elif "short_name_occupied" in err_msg or "stickerset_invalid" in err_msg:
                     continue
                 else:
@@ -1160,17 +1316,17 @@ class JellyParserMod(loader.Module):
     def __init__(self):
         self._semaphore = None
 
-    def _sem(self):
+    def _sem(self, concurrency: int = CONCURRENCY):
         if self._semaphore is None:
-            self._semaphore = asyncio.Semaphore(CONCURRENCY)
+            self._semaphore = asyncio.Semaphore(concurrency)
         return self._semaphore
 
-    async def _parallel(self, docs, fn, label, message):
+    async def _parallel(self, docs, fn, label, message, concurrency: int = CONCURRENCY):
         log = logger
         results = []
         lock = asyncio.Lock()
         progress = [0]
-        sem = self._sem()
+        sem = asyncio.Semaphore(concurrency)
         last_edit = [0.0]
 
         async def _update_progress(p, n):
@@ -1198,13 +1354,12 @@ class JellyParserMod(loader.Module):
                     async with sem:
                         item = await fn(i, doc)
                     break
+                except FloodWaitError as e:
+                    wait = getattr(e, "seconds", None) or 5 * (attempt + 1)
+                    log.warning(f"_parallel FloodWait item {i}, sleeping {wait}s")
+                    await asyncio.sleep(wait)
                 except Exception as e:
-                    err = str(e)
-                    if "FloodWait" in err or "flood" in err.lower():
-                        wait = 5 * (attempt + 1)
-                        log.warning(f"_parallel FloodWait item {i}, sleeping {wait}s")
-                        await asyncio.sleep(wait)
-                    elif attempt < retries - 1:
+                    if attempt < retries - 1:
                         log.warning(f"_parallel item {i} attempt {attempt + 1} failed: {e}")
                         await asyncio.sleep(1)
                     else:
@@ -1281,13 +1436,19 @@ class JellyParserMod(loader.Module):
                 decompressed = gzip.decompress(raw)
                 lottie_obj = orjson.loads(decompressed) if HAS_ORJSON else json.loads(decompressed.decode("utf-8"))
                 
-                targets = _find_text_targets(lottie_obj)
-                if not targets:
+                has_text = bool(_find_text_targets(lottie_obj))
+                has_logo = _has_logo_elements(lottie_obj)
+                
+                if not has_text and not has_logo:
                     return None
                 
                 bounds = _get_textgroup_bounds(lottie_obj)
-                target_info = f"Target types: {[t.get('ty') for t in targets]}" if targets else "None"
-                debug_logs.append(f"Doc {i} ({getattr(doc, 'id', 'unknown')}): bounds={bounds}, targets={target_info}")
+                if not bounds and has_logo:
+                    # В случае логотипа без текста используем стандартные границы для новой текстовой группы
+                    bounds = (-256.0, -25.0, 256.0, 25.0)
+                
+                target_info = f"HasText: {has_text}, HasLogo: {has_logo}"
+                debug_logs.append(f"Doc {i} ({getattr(doc, 'id', 'unknown')}): bounds={bounds}, info={target_info}")
                 
                 if bounds:
                     return doc
@@ -1299,10 +1460,10 @@ class JellyParserMod(loader.Module):
         filtered_docs = [d for d in filtered_docs if d is not None]
 
         if not filtered_docs:
-            await status_msg.edit(pe("❌", PE["err"]) + " В паке не найдено эмодзи с текстовыми группами (textGroup).", parse_mode="HTML")
+            await status_msg.edit(pe("❌", PE["err"]) + " В паке не найдено эмодзи с текстовыми или лого-группами.", parse_mode="HTML")
             return
 
-        await status_msg.edit(pe("⏰", PE["clock"]) + f" Найдено <b>{len(filtered_docs)}</b> текстовых эмодзи. Создаём пак...", parse_mode="HTML")
+        await status_msg.edit(pe("⏰", PE["clock"]) + f" Найдено <b>{len(filtered_docs)}</b> подходящих эмодзи. Создаём пак...", parse_mode="HTML")
 
         # Find first free mainemoji_jellycolor{n}_by_justidev
         n = 1
@@ -1382,66 +1543,9 @@ class JellyParserMod(loader.Module):
             await status_msg.edit(pe("❌", PE["err"]) + f" Не удалось создать набор: <code>{e}</code>{log_info}", parse_mode="HTML")
 
     @loader.command()
-    async def jupdate(self, message: Message):
-        """Проверить обновления и обновить модули по коммитам"""
-        msg = await utils.answer(message, pe("⏰", PE["clock"]) + " Проверяем наличие обновлений...", parse_mode="HTML")
-
-        cwd = "/root/justi-modules"
-        if not os.path.exists(cwd):
-            await msg.edit(pe("❌", PE["err"]) + f" Директория репозитория <code>{cwd}</code> не найдена.", parse_mode="HTML")
-            return
-
-        async def run_cmd(cmd: str) -> tuple:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd
-            )
-            stdout, stderr = await proc.communicate()
-            return proc.returncode, stdout.decode("utf-8").strip(), stderr.decode("utf-8").strip()
-
-        await run_cmd("git config --global --add safe.directory /root/justi-modules")
-
-        code, out, err = await run_cmd("git fetch origin main")
-        if code != 0:
-            await msg.edit(pe("❌", PE["err"]) + f" Не удалось получить обновления с GitHub: <code>{err or out}</code>", parse_mode="HTML")
-            return
-
-        code_l, local_commit, err_l = await run_cmd("git rev-parse HEAD")
-        code_r, remote_commit, err_r = await run_cmd("git rev-parse origin/main")
-
-        if code_l != 0 or code_r != 0:
-            await msg.edit(pe("❌", PE["err"]) + " Не удалось получить информацию о коммитах.", parse_mode="HTML")
-            return
-
-        if local_commit == remote_commit:
-            await msg.edit(
-                pe("✅", PE["ok"]) + " <b>У вас уже установлена актуальная версия модулей!</b>\n\n"
-                f"Коммит: <code>{local_commit[:7]}</code>",
-                parse_mode="HTML"
-            )
-            return
-
-        await msg.edit(pe("⏰", PE["clock"]) + " Обновляем файлы репозитория...", parse_mode="HTML")
-        code_p, out_p, err_p = await run_cmd("git pull --rebase origin main")
-        if code_p != 0:
-            await msg.edit(pe("❌", PE["err"]) + f" Ошибка при обновлении репозитория: <code>{err_p or out_p}</code>", parse_mode="HTML")
-            return
-
-        try:
-            import shutil
-            shutil.copy2("/root/justi-modules/modules/JellyColor.py", "/root/JellyColor.py")
-            shutil.copy2("/root/justi-modules/modules/JellyParser.py", "/root/JellyParser.py")
-        except Exception:
-            pass
-
-        await msg.edit(pe("⏰", PE["clock"]) + " Устанавливаем обновления через встроенную команду...", parse_mode="HTML")
-
-        url_color = "https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/modules/JellyColor.py"
+    async def jupd(self, message: Message):
+        """Обновить модуль JellyParser"""
+        msg = await utils.answer(message, pe("⏰", PE["clock"]) + " Обновляем JellyParser...", parse_mode="HTML")
         url_parser = "https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/modules/JellyParser.py"
-
-        await self._client.send_message(message.chat_id, f".dlm {url_color}")
         await self._client.send_message(message.chat_id, f".dlm {url_parser}")
-
         await msg.delete()
