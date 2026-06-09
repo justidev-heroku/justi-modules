@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.4.4                     ║
+# ║                        🎨 JellyColor v4.4.5                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.4.4: add .jupdate command for git update and commit check     ║
+# ║  v4.4.5: install updates using built-in .dlm command            ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 4, 4)
+__version__ = (4, 4, 5)
 
 import asyncio
 import glob
@@ -3118,18 +3118,21 @@ class JellyColorMod(loader.Module):
             await msg.edit(pe("❌", PE["err"]) + f" Ошибка при обновлении репозитория: <code>{err_p or out_p}</code>")
             return
 
-        # Copy files to active locations
+        # Copy files to active locations to keep git status clean
         try:
             import shutil
             shutil.copy2("/root/justi-modules/modules/JellyColor.py", "/root/JellyColor.py")
             shutil.copy2("/root/justi-modules/modules/JellyParser.py", "/root/JellyParser.py")
-        except Exception as e:
-            await msg.edit(pe("❌", PE["err"]) + f" Ошибка при копировании файлов: <code>{e}</code>")
-            return
+        except Exception:
+            pass
 
-        await msg.edit(
-            pe("✅", PE["ok"]) + " <b>Модули успешно обновлены до последней версии!</b>\n\n"
-            f"Предыдущий коммит: <code>{local_commit[:7]}</code>\n"
-            f"Новый коммит: <code>{remote_commit[:7]}</code>\n\n"
-            "Пожалуйста, перезагрузите юзербот с помощью <code>.restart</code> для применения изменений."
-        )
+        # Send .dlm commands to install/update the modules dynamically
+        await msg.edit(pe("⏰", PE["clock"]) + " Устанавливаем обновления через встроенную команду...")
+        
+        url_color = "https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/modules/JellyColor.py"
+        url_parser = "https://raw.githubusercontent.com/justidev-heroku/justi-modules/refs/heads/main/modules/JellyParser.py"
+        
+        await self._client.send_message(message.chat_id, f".dlm {url_color}")
+        await self._client.send_message(message.chat_id, f".dlm {url_parser}")
+        
+        await msg.delete()
