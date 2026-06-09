@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.4.8                     ║
+# ║                        🎨 JellyColor v4.4.7                     ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.4.8: Исправлено зависание ввода при таймауте callback-запроса║
+# ║  v4.4.7: Добавлен шаблон Секс на пляже                           ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 4, 8)
+__version__ = (4, 4, 7)
 
 import asyncio
 import glob
@@ -1712,20 +1712,6 @@ class JellyColorMod(loader.Module):
             self._semaphore=asyncio.Semaphore(RECOLOR_CONCURRENCY)
         return self._semaphore
 
-    async def _safe_edit(self, call, text, reply_markup):
-        try:
-            await call.edit(text=text, reply_markup=reply_markup)
-        except Exception:
-            try:
-                await self._client.edit_message(
-                    entity=call.chat_id,
-                    message=call.message_id,
-                    text=text,
-                    buttons=reply_markup
-                )
-            except Exception:
-                pass
-
     def _expire(self):
         now=time.time()
         for store in (self._sessions,self._tsessions):
@@ -2075,7 +2061,7 @@ class JellyColorMod(loader.Module):
         if not c.startswith("#"): c="#"+c
         if not re.fullmatch(r"#[0-9a-fA-F]{6}",c): await call.answer("Неверный HEX.",show_alert=True); return
         s["color"]=c.upper(); s["gradient"]=None; s["step"]="title"
-        await self._safe_edit(call,text=self._j_text(uid),reply_markup=self._j_markup(uid))
+        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_open_grad(self,call,uid):
         s=self._sessions.get(uid)
@@ -2116,7 +2102,7 @@ class JellyColorMod(loader.Module):
             await call.answer("Нужно минимум 2 HEX через запятую, например #FF0000,#0000FF",show_alert=True); return
         g={"id":"custom","name":"✏️ Свой","colors":colors,"dir":"d"}
         s["gradient"]=g; s["color"]="grad:✏️ Свой"; s["step"]="title"
-        await self._safe_edit(call,text=self._j_text(uid),reply_markup=self._j_markup(uid))
+        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_title(self,call,value,uid):
         s=self._sessions.get(uid)
@@ -2124,7 +2110,7 @@ class JellyColorMod(loader.Module):
         title=value.strip()
         if not title: await call.answer("Название не может быть пустым.",show_alert=True); return
         s["pack_title"]=title; s["step"]="name"
-        await self._safe_edit(call,text=self._j_text(uid),reply_markup=self._j_markup(uid))
+        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_name(self,call,value,uid):
         s=self._sessions.get(uid)
@@ -2148,11 +2134,11 @@ class JellyColorMod(loader.Module):
             
         if exists:
             s["step"]="exists_choice"
-            await self._safe_edit(call,text=self._j_text(uid), reply_markup=self._j_markup(uid))
+            await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
         else:
             s["step"]="processing"
             s["exists_mode"]="recreate"
-            await self._safe_edit(call,text=self._j_text(uid), reply_markup=self._j_markup(uid))
+            await call.edit(text=self._j_text(uid), reply_markup=self._j_markup(uid))
             s["run_task"] = asyncio.ensure_future(self._j_run(call,uid))
 
     async def _j_handle_exists_choice(self, call, uid, choice):
@@ -2483,7 +2469,7 @@ class JellyColorMod(loader.Module):
             await call.answer("Введите корректное число (например, 80 или 120)", show_alert=True)
             return
         s["step"] = "preview_gen"
-        await self._safe_edit(call, text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
         s["preview_task"] = asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
 
     async def _jt_tmpl(self,call,uid,idx):
@@ -2499,7 +2485,7 @@ class JellyColorMod(loader.Module):
         if not c: await call.answer("Пустой текст.",show_alert=True); return
         if len(c)>12: await call.answer("Макс 12 символов.",show_alert=True); return
         s["text"]=c; s["step"]="font"
-        await self._safe_edit(call,text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
+        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
     async def _jt_font_sel(self, call, uid, font_title):
         s = self._tsessions.get(uid)
@@ -2690,7 +2676,7 @@ class JellyColorMod(loader.Module):
             await call.answer("Нужно минимум 2 HEX через запятую, например #FF0000,#0000FF",show_alert=True); return
         g={"id":"custom","name":"✏️ Свой","colors":colors,"dir":"d"}
         s["gradient"]=g; s["color"]="grad:✏️ Свой"; s["step"]="title"
-        await self._safe_edit(call,text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
+        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
 
     async def _jt_title(self,call,value,uid):
@@ -2699,7 +2685,7 @@ class JellyColorMod(loader.Module):
         title=value.strip()
         if not title: await call.answer("Название не может быть пустым.",show_alert=True); return
         s["pack_title"]=title; s["step"]="name"
-        await self._safe_edit(call,text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
+        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
     async def _jt_name(self,call,value,uid):
         s=self._tsessions.get(uid)
@@ -2722,11 +2708,11 @@ class JellyColorMod(loader.Module):
             
         if exists:
             s["step"]="exists_choice"
-            await self._safe_edit(call,text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+            await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
         else:
             s["step"]="processing"
             s["exists_mode"]="recreate"
-            await self._safe_edit(call,text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+            await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
             s["run_task"] = asyncio.ensure_future(self._jt_run(call,uid))
 
     async def _jt_handle_exists_choice(self, call, uid, choice):
