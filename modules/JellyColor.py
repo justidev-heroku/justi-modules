@@ -1,8 +1,8 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.5.1                      ║
+# ║                        🎨 JellyColor v4.5.2                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.5.1: Минорное обновление: Убран пак «All in All»             ║
-#            и фикс пака »Чёрные»                                    ║
+# ║  v4.5.2: Фикс: ввод значений не работал после остановки          ║
+# ║          генерации предпросмотра                                  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -33,7 +33,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 5, 1)
+__version__ = (4, 5, 2)
 
 import asyncio
 import glob
@@ -2438,6 +2438,7 @@ class JellyColorMod(loader.Module):
         s = self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.", show_alert=True); return
         if task_type == "preview":
+            s["_preview_cancelled"] = True
             task = s.get("preview_task")
             if task and not task.done():
                 task.cancel()
@@ -2524,6 +2525,7 @@ class JellyColorMod(loader.Module):
         s = self._tsessions.get(uid)
         if not s: return
         s["preview_running"] = True
+        s["_preview_cancelled"] = False
         if "scale_factor" not in s:
             s["scale_factor"] = 0.8
         tmpl = s["template"]
@@ -2584,21 +2586,17 @@ class JellyColorMod(loader.Module):
                     logger.exception("Failed to send preview item")
         except asyncio.CancelledError:
             logger.info("Preview generation task was cancelled.")
-            raise
+            return
         finally:
             s["preview_running"] = False
-            is_cancelled = False
-            try:
-                t = asyncio.current_task()
-                if t and t.cancelled():
-                    is_cancelled = True
-            except Exception:
-                pass
-            
-            if not is_cancelled:
+
+            if not s.get("_preview_cancelled"):
                 if uid in self._tsessions and self._tsessions[uid] is s:
                     s["step"] = "preview"
-                    await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+                    try:
+                        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+                    except Exception:
+                        pass
                     try:
                         await call.answer("💬 Первые 5 эмодзи отправлены в Избранное (Saved Messages) для предпросмотра!", show_alert=True)
                     except Exception:
