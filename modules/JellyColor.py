@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.5.5                      ║
+# ║                        🎨 JellyColor v4.5.6                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.5.5: Текст без плейсхолдера больше не уходит за эмодзи       ║
+# ║  v4.5.6: Убран дубль текста при наличии готового плейсхолдера    ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 5, 5)
+__version__ = (4, 5, 6)
 
 import asyncio
 import glob
@@ -1516,33 +1516,62 @@ def _add_default_text_layer(lottie: dict):
     layers.insert(0, new_layer)
 
 
-def _lift_default_text_to_front(lottie: dict) -> bool:
-    """Move stand-alone fallback text layers ("Text 1", unparented, top level)
-    to the front of the z-order.
+def _normalize_text_layers(lottie: dict) -> bool:
+    """Reconcile stand-alone fallback text layers ("Text 1", unparented, top level).
 
-    Some templates were baked with the text layer appended at the *end* of the
-    layers array (an old bug in _add_default_text_layer), which renders the text
-    behind the emoji. When such a pack is regenerated the text is replaced in
-    place and stays buried. Lifting these layers to the front fixes both the
-    legacy templates and any freshly added fallback layer.
+    Old fallback runs appended a stand-alone "Text 1" layer to the *end* of the
+    layers array. Templates that already carry an authored, parented text layer
+    (e.g. "Text Shape") thus accumulate a stale duplicate: the replacement is
+    written into both, so the same text shows twice — once correctly inside the
+    artwork and once as a leftover floating copy.
+
+    Rule:
+      * If another real text target exists (a parented/keyword text layer that
+        is not a bare "Text 1"), the stand-alone "Text 1" layers are stale
+        duplicates -> drop them, keeping the authored one.
+      * Otherwise "Text 1" is the only text (a genuine placeholder-less emoji)
+        -> keep it and lift it to the front so it renders on top of the emoji.
     """
     layers = lottie.get("layers")
     if not isinstance(layers, list) or len(layers) < 2:
         return False
-    movers, rest = [], []
-    for l in layers:
-        nm = (l.get("nm") or "")
-        is_default_text = (
+
+    def is_default(l):
+        nm = l.get("nm") or ""
+        return (
             isinstance(nm, str)
             and nm.strip().lower() == "text 1"
             and l.get("parent") is None
             and l.get("ty") in (4, 5)
         )
-        (movers if is_default_text else rest).append(l)
-    if not movers or layers[:len(movers)] == movers:
+
+    def is_text_target(l):
+        nm = l.get("nm") or ""
+        if not isinstance(nm, str):
+            return False
+        nl = nm.lower()
+        return (
+            l.get("ty") in (4, 5)
+            and "user" not in nl
+            and any(k in nl for k in ("text", "letters", "logo", "label", "title", "caption"))
+        )
+
+    defaults = [l for l in layers if is_default(l)]
+    if not defaults:
         return False
-    layers[:] = movers + rest
-    return True
+
+    others = [l for l in layers if is_text_target(l) and l not in defaults]
+    if others:
+        # Stale duplicates: keep the authored text layer, drop the floating copies.
+        layers[:] = [l for l in layers if l not in defaults]
+        return True
+
+    # Sole text layer: lift to the front (Lottie composites back-to-front).
+    rest = [l for l in layers if l not in defaults]
+    if layers[:len(defaults)] != defaults:
+        layers[:] = defaults + rest
+        return True
+    return False
 
 
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None, scale_factor: float = 1.0) -> bool:
@@ -1551,8 +1580,8 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None, scale_fact
     if not font_path: return False
     changed=False
 
-    # Pull any legacy "behind the emoji" fallback text layers back to the front.
-    if _lift_default_text_to_front(lottie):
+    # Drop stale duplicate / un-bury fallback text layers before replacing text.
+    if _normalize_text_layers(lottie):
         changed=True
 
     # Check bounds. If not found, add default text layer!
