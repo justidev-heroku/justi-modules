@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.5.3                                  ║
-# ║           Перекраска стикеров/эмодзи + текстовые шаблоны                     ║
-# ║  v4.5.3: Предпросмотр теперь по кнопке, а не авто                            ║
+# ║                        🎨 JellyColor v4.5.4                      ║
+# ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
+# ║  v4.5.4: Исправлен баг привязки текста и слоев для Shape Layers  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 5, 3)
+__version__ = (4, 5, 4)
 
 import asyncio
 import glob
@@ -1056,7 +1056,7 @@ def _get_textgroup_bounds(lottie):
     named_targets = []
     for el in elements:
         ty = el.get("ty")
-        if ty == "gr" and matches(el.get("nm")):
+        if (ty == "gr" or ty == 4 or ty == "4") and matches(el.get("nm")):
             cnt = 0
             t_todo = [el]
             while t_todo:
