@@ -1,7 +1,8 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.5.0                     ║
+# ║                        🎨 JellyColor v4.5.й                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.5.0: Добавлен шаблон Секс на пляже                           ║
+# ║  v4.5.1: Минорное обновление: Убран пак «All in All»             ║
+#            и фикс пака »Чёрные»                                    ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +33,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 5, 0)
+__version__ = (4, 5, 1)
 
 import asyncio
 import glob
@@ -160,13 +161,12 @@ GRADIENT_PRESETS = [
 ]
 
 TEMPLATE_SETS = [
-    {"title": "🖤 Чёрные", "short_name": "mainemoji_jellycolor12_by_justidev"},
+    {"title": "🖤 Чёрные", "short_name": "mainemoji_jellycolor53_by_justidev"},
     {"title": "🖤 Чёрные 2", "short_name": "mainemoji_jellycolor5_by_justidev"},
     {"title": "🎨 Цветные", "short_name": "mainemoji_jellycolor4_by_justidev"},
     {"title": "🗂 Паспорт", "short_name": "mainemoji_jellycolor9_by_justidev"},
     {"title": "✨ Эксклюзивные", "short_name": "mainemoji_jellycolor10_by_justidev"},
     {"title": "✨ Эксклюзивные 2", "short_name": "mainemoji_jellycolor37_by_justidev"},
-    {"title": "📦 All in All", "short_name": "mainemoji_jellycolor14_by_justidev"},
     {"title": "🍹 Секс на пляже", "short_name": "mainemoji_jellycolor51_by_justidev"},
 ]
 
