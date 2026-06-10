@@ -1,8 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.5.2                      ║
+# ║                        🎨 JellyColor v4.5.3                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.5.2: Фикс: ввод значений не работал после остановки          ║
-# ║          генерации предпросмотра                                  ║
+# ║  v4.5.3: Предпросмотр теперь по кнопке, а не авто              ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -33,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 5, 2)
+__version__ = (4, 5, 3)
 
 import asyncio
 import glob
@@ -2301,12 +2300,11 @@ class JellyColorMod(loader.Module):
         if step=="text": return pe("✍️",PE["write"])+f" <b>Введите текст</b>\n\nШаблон: <b>{s['template']['title']}</b>\n2-4 символа — оптимально."
         if step=="font": return pe("✍️",PE["write"])+f" <b>Выберите шрифт</b>\n\nТекст: <code>{s['text']}</code>"
         if step=="preview":
-            return (pe("🔎",PE["eye"])+f" <b>Предпросмотр масштаба</b>\n\n"
+            return (pe("🔎",PE["eye"])+f" <b>Настройка масштаба</b>\n\n"
                     f"Текст: <code>{s['text']}</code>\n"
                     f"Шрифт: <b>{s.get('font_title', 'Comfortaa')}</b>\n"
                     f"Текущий масштаб: <b>{s.get('scale_factor', 0.8):.2f}x</b> ({int(round(s.get('scale_factor', 0.8) * 100))}%)\n\n"
-                    f"Первые 5 эмодзи отправлены в ваше <b>Избранное</b> (Saved Messages) для предпросмотра.\n"
-                    f"Вы можете настроить масштаб кнопками ниже.")
+                    f"Настройте масштаб кнопками ниже, затем нажмите <b>👁 Предпросмотр</b> чтобы увидеть результат в Избранном.")
         if step=="preview_gen":
             return pe("⏰",PE["clock"])+f" <b>Генерирую предпросмотр...</b>\n\nСоздаю первые 5 эмодзи с масштабом <b>{s.get('scale_factor', 0.8):.2f}x</b> и отправляю в Избранное."
         if step=="color":
@@ -2350,6 +2348,9 @@ class JellyColorMod(loader.Module):
                 ],
                 [
                     {"text": "📝 Свой масштаб (%)", "input": "Введите масштаб в % (например, 80 или 120)", "handler": self._jt_custom_scale_in, "args": (uid,), "style": "primary"},
+                ],
+                [
+                    {"text": "👁 Предпросмотр", "icon_custom_emoji_id": PE["eye"],"emoji_id":PE["eye"], "style": "success", "callback": self._jt_preview_btn, "args": (uid,)},
                 ],
                 [
                     {"text": "✅ Применить", "icon_custom_emoji_id": PE["ok"],"emoji_id":PE["ok"], "style": "success", "callback": self._jt_confirm, "args": (uid,)},
@@ -2469,9 +2470,8 @@ class JellyColorMod(loader.Module):
         except ValueError:
             await call.answer("Введите корректное число (например, 80 или 120)", show_alert=True)
             return
-        s["step"] = "preview_gen"
+        s["step"] = "preview"
         await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-        s["preview_task"] = asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
 
     async def _jt_tmpl(self,call,uid,idx):
         s=self._tsessions.get(uid)
@@ -2491,9 +2491,6 @@ class JellyColorMod(loader.Module):
     async def _jt_font_sel(self, call, uid, font_title):
         s = self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.", show_alert=True); return
-        if s.get("preview_running"):
-            await call.answer("⏳ Генерируется предыдущий предпросмотр, подождите...", show_alert=True)
-            return
         if font_title == "default":
             s["font_path"] = None
             s["font_title"] = "Comfortaa"
@@ -2506,9 +2503,8 @@ class JellyColorMod(loader.Module):
             else:
                 s["font_path"] = None
                 s["font_title"] = "Comfortaa"
-        s["step"] = "preview_gen"
+        s["step"] = "preview"
         await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
-        s["preview_task"] = asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
 
     async def _jt_scale_change(self, call, uid, delta):
         s = self._tsessions.get(uid)
@@ -2517,6 +2513,14 @@ class JellyColorMod(loader.Module):
             await call.answer("⏳ Генерируется предыдущий предпросмотр, подождите...", show_alert=True)
             return
         s["scale_factor"] = round(max(0.1, min(3.0, s.get("scale_factor", 0.8) + delta)), 1)
+        await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
+
+    async def _jt_preview_btn(self, call, uid):
+        s = self._tsessions.get(uid)
+        if not s: await call.answer("Сессия устарела.", show_alert=True); return
+        if s.get("preview_running"):
+            await call.answer("⏳ Генерируется предыдущий предпросмотр, подождите...", show_alert=True)
+            return
         s["step"] = "preview_gen"
         await call.edit(text=self._jt_text(uid), reply_markup=self._jt_markup(uid))
         s["preview_task"] = asyncio.ensure_future(self._jt_generate_and_send_preview(uid, call))
