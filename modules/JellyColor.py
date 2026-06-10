@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.5.4                      ║
+# ║                        🎨 JellyColor v4.5.5                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.5.4: Исправлен баг привязки текста и слоев для Shape Layers  ║
+# ║  v4.5.5: Текст без плейсхолдера больше не уходит за эмодзи       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 5, 4)
+__version__ = (4, 5, 5)
 
 import asyncio
 import glob
@@ -1510,7 +1510,39 @@ def _add_default_text_layer(lottie: dict):
             }
         }
     }
-    layers.append(new_layer)
+    # Insert at the FRONT of the layer list. Lottie/TGS composites the layers
+    # array back-to-front (index 0 is the front-most layer), so appending would
+    # bury the text *behind* the emoji artwork. Inserting at 0 keeps it on top.
+    layers.insert(0, new_layer)
+
+
+def _lift_default_text_to_front(lottie: dict) -> bool:
+    """Move stand-alone fallback text layers ("Text 1", unparented, top level)
+    to the front of the z-order.
+
+    Some templates were baked with the text layer appended at the *end* of the
+    layers array (an old bug in _add_default_text_layer), which renders the text
+    behind the emoji. When such a pack is regenerated the text is replaced in
+    place and stays buried. Lifting these layers to the front fixes both the
+    legacy templates and any freshly added fallback layer.
+    """
+    layers = lottie.get("layers")
+    if not isinstance(layers, list) or len(layers) < 2:
+        return False
+    movers, rest = [], []
+    for l in layers:
+        nm = (l.get("nm") or "")
+        is_default_text = (
+            isinstance(nm, str)
+            and nm.strip().lower() == "text 1"
+            and l.get("parent") is None
+            and l.get("ty") in (4, 5)
+        )
+        (movers if is_default_text else rest).append(l)
+    if not movers or layers[:len(movers)] == movers:
+        return False
+    layers[:] = movers + rest
+    return True
 
 
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None, scale_factor: float = 1.0) -> bool:
@@ -1518,7 +1550,11 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None, scale_fact
         font_path=_ensure_font()
     if not font_path: return False
     changed=False
-    
+
+    # Pull any legacy "behind the emoji" fallback text layers back to the front.
+    if _lift_default_text_to_front(lottie):
+        changed=True
+
     # Check bounds. If not found, add default text layer!
     bounds=_get_textgroup_bounds(lottie)
     if not bounds:
