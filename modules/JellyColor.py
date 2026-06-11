@@ -32,7 +32,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 5, 6)
+__version__ = (4, 5, 7)
 
 import asyncio
 import glob
@@ -167,6 +167,7 @@ TEMPLATE_SETS = [
     {"title": "✨ Эксклюзивные", "short_name": "mainemoji_jellycolor10_by_justidev"},
     {"title": "✨ Эксклюзивные 2", "short_name": "mainemoji_jellycolor37_by_justidev"},
     {"title": "🍹 Секс на пляже", "short_name": "mainemoji_jellycolor51_by_justidev"},
+    {"title": "💚 Green", "short_name": "mainemoji_jellycolor57_by_justidev"},
 ]
 
 TEMPLATE_PLACEHOLDER = "jelly"
