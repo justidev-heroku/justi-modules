@@ -1,9 +1,10 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.4.0                     ║
+# ║                        🔮 JellyParser v0.5.0                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.4.0: Распознавание запечённых SVG-логотипов маркетплейс-паков ║
-# ║         (@uMarketPlaceBot и др.) по геометрии и пересборка их     ║
-# ║         в текстовую группу пользователя                          ║
+# ║ v0.5.0: Общий парсинг запечённых SVG-логотипов маркетплейс-паков ║
+# ║         (@uMarketPlaceBot, SVG-пак, @SHARKOFDARK) с резолвом      ║
+# ║         глобальных трансформ (precomp/parenting/glow-копии) и     ║
+# ║         пересборкой каждого в текстовую группу пользователя       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -63,7 +64,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 4, 0)
+__version__ = (0, 5, 0)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -1061,6 +1062,28 @@ def _add_default_text_layer(lottie: dict):
     layers.append(new_layer)
 
 
+# Имя-маркер группы, в которую вписан текст пользователя поверх логотипа.
+_JELLY_TEXT_NM = "JellyText"
+
+
+def _contains_jelly_text(obj) -> bool:
+    """True, если внутри obj есть группа-маркер с вписанным текстом пользователя."""
+    todo = [obj]
+    while todo:
+        o = todo.pop()
+        if isinstance(o, dict):
+            if o.get("nm") == _JELLY_TEXT_NM:
+                return True
+            for v in o.values():
+                if isinstance(v, (dict, list)):
+                    todo.append(v)
+        elif isinstance(o, list):
+            for item in o:
+                if isinstance(item, (dict, list)):
+                    todo.append(item)
+    return False
+
+
 def _remove_logo_elements(lottie: dict) -> bool:
     """
     Удаляет SVG-логотипы и водяные знаки из Lottie JSON.
@@ -1068,7 +1091,15 @@ def _remove_logo_elements(lottie: dict) -> bool:
     'logo', 'лого', 'sod', 'svg_outline', 'svg_item'.
     """
     removed = False
-    
+
+    def _named_logo(item):
+        nm = item.get("nm", "")
+        nm_lower = nm.lower() if isinstance(nm, str) else ""
+        # v0.5.0: не удаляем то, во что уже вписан текст пользователя
+        if _contains_jelly_text(item):
+            return False
+        return any(kw in nm_lower for kw in ("logo", "лого", "sod", "svg_outline", "svg_item"))
+
     def clean_shapes_recursive(shapes_list):
         nonlocal removed
         if not isinstance(shapes_list, list):
@@ -1079,19 +1110,10 @@ def _remove_logo_elements(lottie: dict) -> bool:
             if not isinstance(item, dict):
                 i += 1
                 continue
-            nm = item.get("nm", "")
-            nm_lower = nm.lower() if isinstance(nm, str) else ""
-            
-            is_logo = False
-            for kw in ["logo", "лого", "sod", "svg_outline", "svg_item"]:
-                if kw in nm_lower:
-                    is_logo = True
-                    break
-            if is_logo:
+            if _named_logo(item):
                 shapes_list.pop(i)
                 removed = True
                 continue
-            
             if "it" in item:
                 clean_shapes_recursive(item["it"])
             if "shapes" in item:
@@ -1101,40 +1123,26 @@ def _remove_logo_elements(lottie: dict) -> bool:
     layers = lottie.get("layers", [])
     new_layers = []
     for l in layers:
-        nm = l.get("nm", "")
-        nm_lower = nm.lower() if isinstance(nm, str) else ""
-        is_logo = False
-        for kw in ["logo", "лого", "sod", "svg_outline", "svg_item"]:
-            if kw in nm_lower:
-                is_logo = True
-                break
-        if is_logo:
+        if isinstance(l, dict) and _named_logo(l):
             removed = True
         else:
             if "shapes" in l:
                 clean_shapes_recursive(l["shapes"])
             new_layers.append(l)
     lottie["layers"] = new_layers
-    
+
     for asset in lottie.get("assets", []):
         alayers = asset.get("layers", [])
         new_alayers = []
         for l in alayers:
-            nm = l.get("nm", "")
-            nm_lower = nm.lower() if isinstance(nm, str) else ""
-            is_logo = False
-            for kw in ["logo", "лого", "sod", "svg_outline", "svg_item"]:
-                if kw in nm_lower:
-                    is_logo = True
-                    break
-            if is_logo:
+            if isinstance(l, dict) and _named_logo(l):
                 removed = True
             else:
                 if "shapes" in l:
                     clean_shapes_recursive(l["shapes"])
                 new_alayers.append(l)
         asset["layers"] = new_alayers
-        
+
     return removed
 
 
@@ -1178,8 +1186,8 @@ def _has_logo_elements(lottie: dict) -> bool:
             if "shapes" in l and check_shapes(l["shapes"]):
                 return True
 
-    # v0.4.0: безымянные запечённые логотипы (распознаём по геометрии)
-    if _find_logo_glyph_groups(lottie):
+    # v0.5.0: безымянные запечённые логотипы (распознаём по геометрии)
+    if _find_logo_pieces(lottie):
         return True
     return False
 
@@ -1218,23 +1226,27 @@ def _remove_empty_text_layers(lottie: dict) -> bool:
 
 # ─── Запечённые SVG-логотипы (фирменные водяные знаки маркетплейс-паков) ─────
 #
-# Паки вроде @uMarketPlaceBot отдают эмодзи как оптимизированный Lottie: имена
-# слоёв/групп вырезаны, а фирменный логотип-«U» запечён в виде векторных путей.
-# Распознать его по nm нельзя, поэтому опознаём по геометрии: логотип состоит
-# из двух характерных контуров (скруглённая «петля» + «ножка»), нормированная
-# форма которых идентична во всех эмодзи пака. Ниже — их эталонные нормированные
-# вершины (bbox → [0..1]). Группа фигур считается логотипом, если содержит обе
-# подписи и не содержит посторонних путей (чтобы не задеть фон/обводку рядом).
+# Паки вроде @uMarketPlaceBot / @SHARKOFDARK отдают эмодзи как оптимизированный
+# Lottie: имена слоёв/групп вырезаны, а фирменный логотип запечён в виде голых
+# векторных путей. Распознать его по nm нельзя — опознаём по геометрии: каждый
+# логотип состоит из набора характерных контуров, нормированная форма которых
+# идентична во всех эмодзи пака. Ниже — их эталонные нормированные вершины
+# (bbox → [0..1]); чтобы добавить новый пак, достаточно дописать его подписи.
+#
+# Чтобы корректно вырезать логотип и поставить текст ровно на его место (включая
+# precomp-ассеты, parenting и несколько glow-копий с разными трансформами), мы
+# резолвим полную цепочку аффинных трансформаций до глобальных координат холста
+# (см. _find_logo_pieces / _replace_logo_glyphs).
 
 _LOGO_SIGNATURES = [
-    # «петля» (27 вершин)
+    # @uMarketPlace «U» — «петля» (27 вершин)
     [(0.345, 0.012), (0.345, 0.012), (0.492, 0.0), (0.62, 0.006), (0.722, 0.027),
      (0.836, 0.071), (0.923, 0.128), (0.966, 0.176), (0.988, 0.248), (1.0, 0.522),
      (0.993, 0.77), (0.966, 0.828), (0.902, 0.891), (0.793, 0.951), (0.664, 0.988),
      (0.492, 1.0), (0.332, 0.989), (0.221, 0.956), (0.12, 0.908), (0.048, 0.845),
      (0.009, 0.765), (0.0, 0.504), (0.008, 0.243), (0.049, 0.158), (0.145, 0.082),
      (0.248, 0.035), (0.345, 0.012)],
-    # «ножка» (38 вершин)
+    # @uMarketPlace «U» — «ножка» (38 вершин)
     [(0.719, 0.0), (0.719, 0.0), (0.764, 0.0), (0.823, 0.008), (0.881, 0.028),
      (0.933, 0.06), (0.999, 0.147), (1.0, 0.312), (0.997, 0.541), (0.979, 0.648),
      (0.937, 0.738), (0.878, 0.815), (0.812, 0.873), (0.744, 0.918), (0.673, 0.951),
@@ -1243,6 +1255,25 @@ _LOGO_SIGNATURES = [
      (0.256, 0.845), (0.352, 0.788), (0.421, 0.72), (0.455, 0.668), (0.48, 0.611),
      (0.494, 0.546), (0.5, 0.337), (0.506, 0.149), (0.526, 0.107), (0.567, 0.06),
      (0.62, 0.028), (0.677, 0.009), (0.719, 0.0)],
+    # SVG-пак: «бумажный самолётик» Telegram (15 вершин)
+    [(0.957, 0.0), (1.0, 0.093), (0.843, 0.953), (0.756, 1.0), (0.382, 0.679),
+     (0.377, 0.668), (0.382, 0.658), (0.814, 0.204), (0.784, 0.192), (0.242, 0.59),
+     (0.23, 0.592), (0.0, 0.507), (0.012, 0.42), (0.933, 0.007), (0.957, 0.0)],
+    # @SHARKOFDARK «T» (25 вершин)
+    [(0.0, 0.0), (0.0, 0.271), (0.031, 0.271), (0.122, 0.1), (0.285, 0.058),
+     (0.365, 0.058), (0.365, 0.829), (0.356, 0.922), (0.323, 0.957), (0.245, 0.973),
+     (0.208, 0.973), (0.208, 1.0), (0.791, 1.0), (0.791, 0.973), (0.754, 0.973),
+     (0.679, 0.958), (0.642, 0.925), (0.632, 0.829), (0.632, 0.058), (0.715, 0.058),
+     (0.824, 0.071), (0.912, 0.136), (0.97, 0.271), (1.0, 0.271), (1.0, 0.0)],
+    # @SHARKOFDARK «S» (39 вершин)
+    [(0.869, 0.0), (0.839, 0.054), (0.796, 0.066), (0.697, 0.043), (0.576, 0.011),
+     (0.442, 0.0), (0.126, 0.08), (0.001, 0.275), (0.047, 0.397), (0.178, 0.498),
+     (0.457, 0.607), (0.651, 0.682), (0.732, 0.742), (0.759, 0.808), (0.689, 0.908),
+     (0.502, 0.951), (0.217, 0.871), (0.039, 0.638), (0.0, 0.638), (0.0, 0.999),
+     (0.039, 0.999), (0.088, 0.956), (0.146, 0.942), (0.229, 0.956), (0.38, 0.991),
+     (0.507, 1.0), (0.861, 0.914), (1.0, 0.708), (0.914, 0.54), (0.576, 0.384),
+     (0.348, 0.302), (0.25, 0.236), (0.228, 0.18), (0.291, 0.091), (0.461, 0.053),
+     (0.719, 0.126), (0.869, 0.319), (0.912, 0.319), (0.9, 0.0)],
 ]
 _LOGO_SIG_TOLERANCE = 0.045
 
@@ -1294,64 +1325,102 @@ def _iter_shape_paths(obj):
                     todo.append(item)
 
 
-def _is_logo_glyph(group):
-    """True, если группа целиком состоит из путей логотипа и содержит обе подписи."""
-    sigs = set()
+# --- Аффинные трансформации (a, b, c, d, e, f): x'=a*x+c*y+e, y'=b*x+d*y+f ---
+_MAT_IDENT = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+
+def _mat_compose(m1, m2):
+    a1, b1, c1, d1, e1, f1 = m1
+    a2, b2, c2, d2, e2, f2 = m2
+    return (a1 * a2 + c1 * b2, b1 * a2 + d1 * b2,
+            a1 * c2 + c1 * d2, b1 * c2 + d1 * d2,
+            a1 * e2 + c1 * f2 + e1, b1 * e2 + d1 * f2 + f1)
+
+
+def _mat_apply(m, x, y):
+    a, b, c, d, e, f = m
+    return (a * x + c * y + e, b * x + d * y + f)
+
+
+def _mat_inv(m):
+    a, b, c, d, e, f = m
+    det = a * d - b * c
+    if abs(det) < 1e-12:
+        return None
+    ia, ib, ic, id_ = d / det, -b / det, -c / det, a / det
+    return (ia, ib, ic, id_, -(ia * e + ic * f), -(ib * e + id_ * f))
+
+
+def _prop_static(prop, default):
+    """Статичное значение свойства; у анимированных берём первый кейфрейм."""
+    if not isinstance(prop, dict):
+        return default
+    k = prop.get("k", default)
+    if isinstance(k, list) and k and isinstance(k[0], dict):
+        return k[0].get("s", default)
+    return k
+
+
+def _mat_from_transform(tr):
+    """Матрица из Lottie-трансформа (ключи a-anchor, p-position, s-scale%, r-rot)."""
+    if not isinstance(tr, dict):
+        return _MAT_IDENT
+    a = _prop_static(tr.get("a"), [0, 0])
+    p = _prop_static(tr.get("p"), [0, 0])
+    s = _prop_static(tr.get("s"), [100, 100])
+    r = _prop_static(tr.get("r"), 0)
+    if not isinstance(a, list):
+        a = [a, a]
+    if not isinstance(p, list):
+        p = [p, p]
+    if not isinstance(s, list):
+        s = [s, s]
+    if isinstance(r, list):
+        r = r[0] if r else 0
+    ax, ay = float(a[0]), float(a[1])
+    px, py = float(p[0]), float(p[1])
+    sx, sy = float(s[0]) / 100.0, float(s[1]) / 100.0
+    th = math.radians(float(r))
+    cos, sin = math.cos(th), math.sin(th)
+    A, B, C, D = cos * sx, sin * sx, -sin * sy, cos * sy
+    return (A, B, C, D, px - (A * ax + C * ay), py - (B * ax + D * ay))
+
+
+def _group_transform(group):
+    for x in group.get("it", group.get("shapes", [])):
+        if isinstance(x, dict) and x.get("ty") == "tr":
+            return x
+    return None
+
+
+def _is_pure_logo_group(group):
+    """True, если все пути группы — контуры логотипа (и есть хотя бы один)."""
     has_path = False
     for verts in _iter_shape_paths(group):
         has_path = True
-        m = _match_logo_signature(verts)
-        if m < 0:
-            return False  # посторонний путь → это не чистая группа логотипа
-        sigs.add(m)
-    return has_path and sigs == set(range(len(_LOGO_SIGNATURES)))
+        if _match_logo_signature(verts) < 0:
+            return False
+    return has_path
 
 
-def _child_groups(group):
-    items = group.get("it", group.get("shapes", []))
-    if not isinstance(items, list):
-        return []
-    return [x for x in items if isinstance(x, dict) and x.get("ty") == "gr"]
+def _collect_global_verts(node, matrix, out):
+    """Собирает вершины путей под node в глобальных координатах (matrix — до node)."""
+    if not isinstance(node, dict):
+        return
+    if node.get("ty") == "gr":
+        m2 = _mat_compose(matrix, _mat_from_transform(_group_transform(node)))
+        for c in node.get("it", node.get("shapes", [])):
+            if isinstance(c, dict) and c.get("ty") != "tr":
+                _collect_global_verts(c, m2, out)
+    elif node.get("ty") == "sh":
+        k = node.get("ks", {}).get("k", {})
+        if isinstance(k, dict) and "v" in k:
+            for v in k["v"]:
+                out.append(_mat_apply(matrix, float(v[0]), float(v[1])))
 
 
-def _find_logo_glyph_groups(lottie):
-    """Минимальные «чистые» группы, каждая из которых целиком образует логотип-«U».
-
-    Возвращает самые внутренние такие группы (по одной на экземпляр глифа), чтобы
-    при пересборке не задеть родительские контейнеры с прочими фигурами.
-    """
-    all_groups = []
-    todo = list(lottie.get("layers", []))
-    for a in lottie.get("assets", []):
-        if isinstance(a, dict):
-            todo += a.get("layers", [])
-    while todo:
-        el = todo.pop()
-        if isinstance(el, dict):
-            if el.get("ty") == "gr":
-                all_groups.append(el)
-            sh = el.get("shapes")
-            if sh:
-                todo += sh
-            it = el.get("it")
-            if it:
-                todo += it
-
-    glyphs = [g for g in all_groups if _is_logo_glyph(g)]
-
-    def has_glyph_descendant(g):
-        for c in _child_groups(g):
-            if _is_logo_glyph(c) or has_glyph_descendant(c):
-                return True
-        return False
-
-    return [g for g in glyphs if not has_glyph_descendant(g)]
-
-
-def _pick_logo_fill(group):
-    """Самый насыщенно-зелёный fill внутри группы логотипа (фирменный цвет)."""
-    best = None
-    best_score = -1e9
+def _grab_group_fills(group):
+    fills = []
     todo = [group]
     while todo:
         o = todo.pop()
@@ -1361,59 +1430,190 @@ def _pick_logo_fill(group):
                 if isinstance(ck, list) and len(ck) >= 3 and all(
                     isinstance(x, (int, float)) for x in ck[:3]
                 ):
-                    r, g, b = float(ck[0]), float(ck[1]), float(ck[2])
-                    score = g - 0.5 * (r + b)  # предпочитаем яркий зелёный, не тень
-                    if score > best_score:
-                        best_score = score
-                        best = o
+                    fills.append((float(ck[0]), float(ck[1]), float(ck[2])))
             for v in o.values():
                 if isinstance(v, (dict, list)):
                     todo.append(v)
         elif isinstance(o, list):
-            for item in o:
-                todo.append(item)
-    return best
+            todo += o
+    return fills
 
 
-def _replace_logo_glyphs(lottie, new_text, font_path, groups=None) -> bool:
-    """Пересобирает каждый найденный логотип-глиф в текстовую группу new_text.
+def _find_logo_pieces(lottie):
+    """Все «чистые» группы-логотипы с резолвом полной цепочки трансформаций.
 
-    Сохраняет собственный трансформ группы и её фирменную заливку, заменяя только
-    векторные контуры логотипа на контуры текста, вписанные в bbox логотипа.
+    Возвращает список словарей: g (группа), verts (вершины в координатах холста),
+    fills (цвета заливок), M (матрица «локаль группы → холст»), root (индекс
+    слоя верхнего уровня — для сохранения порядка отрисовки).
     """
-    if groups is None:
-        groups = _find_logo_glyph_groups(lottie)
-    if not groups:
-        return False
-    changed = False
-    for g in groups:
-        bounds = _verts_to_bounds(_collect_path_verts(g))
-        if not bounds:
+    assets = {a.get("id"): a for a in lottie.get("assets", []) if isinstance(a, dict)}
+    pieces = []
+
+    def process(layers, base, root_of):
+        by_ind = {l.get("ind"): l for l in layers if isinstance(l, dict)}
+
+        def layer_matrix(l, seen):
+            m = _mat_from_transform(l.get("ks", {}))
+            pid = l.get("parent")
+            par = by_ind.get(pid)
+            if par is not None and id(par) not in seen:
+                m = _mat_compose(layer_matrix(par, seen | {id(par)}), m)
+            return m
+
+        for idx, l in enumerate(layers):
+            if not isinstance(l, dict):
+                continue
+            root = idx if root_of is None else root_of
+            lm = _mat_compose(base, layer_matrix(l, {id(l)}))
+            if l.get("ty") == 0 and l.get("refId") in assets:
+                process(assets[l["refId"]].get("layers", []), lm, root)
+
+            def walk(node, m):
+                if not isinstance(node, dict):
+                    return
+                if node.get("ty") == "gr":
+                    if _is_pure_logo_group(node):
+                        mfull = _mat_compose(m, _mat_from_transform(_group_transform(node)))
+                        verts = []
+                        _collect_global_verts(node, m, verts)
+                        if verts:
+                            pieces.append({
+                                "g": node, "verts": verts,
+                                "fills": _grab_group_fills(node),
+                                "M": mfull, "root": root,
+                            })
+                        return
+                    m2 = _mat_compose(m, _mat_from_transform(_group_transform(node)))
+                    for c in node.get("it", node.get("shapes", [])):
+                        if isinstance(c, dict) and c.get("ty") != "tr":
+                            walk(c, m2)
+
+            for sh in l.get("shapes", []) or []:
+                walk(sh, lm)
+
+    process(lottie.get("layers", []), _MAT_IDENT, None)
+    return pieces
+
+
+def _cluster_logo_pieces(pieces):
+    """Объединяет близкие/перекрывающиеся куски логотипа в один экземпляр."""
+    n = len(pieces)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    bbs = [_verts_to_bounds(p["verts"]) for p in pieces]
+
+    def close(b1, b2):
+        gx = max(b2[0] - b1[2], b1[0] - b2[2], 0.0)
+        gy = max(b2[1] - b1[3], b1[1] - b2[3], 0.0)
+        s1 = max(b1[2] - b1[0], b1[3] - b1[1])
+        s2 = max(b2[2] - b2[0], b2[3] - b2[1])
+        thr = 0.6 * min(s1, s2)
+        return gx <= thr and gy <= thr
+
+    for i in range(n):
+        if bbs[i] is None:
             continue
-        x1, y1, x2, y2 = bounds
-        cx = (x1 + x2) / 2.0
-        cy = (y1 + y2) / 2.0
-        height = max(abs(y2 - y1), 5.0)
-        # «U» — узкий и высокий, слово шире: даём запас по ширине, но не позволяем
-        # тексту, отцентрованному по cx, вылезти за пределы холста.
-        canvas_w = float(lottie.get("w", 512) or 512)
-        room = 2.0 * min(cx, max(canvas_w - cx, 0.0)) * 0.95
-        max_width = max(min(abs(x2 - x1) * 1.6, room or canvas_w), 5.0)
+        for j in range(i + 1, n):
+            if bbs[j] is not None and close(bbs[i], bbs[j]):
+                parent[find(i)] = find(j)
+
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    return list(groups.values())
+
+
+def _choose_logo_text_color(lottie, fills, targets):
+    """Цвет текста = собственный цвет логотипа (он был виден ⇒ текст тоже будет).
+
+    Среди заливок логотипа берём насыщенный фирменный цвет (если он есть), иначе
+    — самый «контрастный» серый (чёрная/белая краска, дальше всего от 0.5 по
+    яркости). К фону обращаемся только если у логотипа вовсе нет заливок.
+    """
+    if fills:
+        best, best_sat = None, -1.0
+        for (r, g, b) in fills:
+            sat = max(r, g, b) - min(r, g, b)
+            if sat > best_sat:
+                best_sat, best = sat, (r, g, b)
+        if best is not None and best_sat >= 0.2:
+            return [best[0], best[1], best[2], 1]
+        # все заливки серые — берём «краску» (макс. отклонение яркости от 0.5)
+        ink = max(fills, key=lambda c: abs(0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] - 0.5))
+        return [ink[0], ink[1], ink[2], 1]
+    if _is_lottie_light(lottie, targets):
+        return [0.05, 0.05, 0.05, 1]
+    return [1, 1, 1, 1]
+
+
+def _replace_logo_glyphs(lottie, new_text, font_path) -> bool:
+    """Вырезает каждый найденный логотип и ставит на его место текстовую группу.
+
+    Текст вписывается в глобальный bbox логотипа, но сами контуры пишутся в
+    локальной системе «основного» куска (через обратную матрицу) — так текст
+    сохраняет исходный порядок отрисовки (z-order): видимый логотип → видимый
+    текст, скрытый водяной знак → скрытый текст. Несколько glow-копий (в т.ч.
+    анимированных, с вырожденной матрицей на первом кадре) очищаются, текст
+    рисуется один раз в неанимированной копии.
+    """
+    pieces = _find_logo_pieces(lottie)
+    if not pieces:
+        return False
+    clusters = _cluster_logo_pieces(pieces)
+    target_groups = [p["g"] for p in pieces]
+    changed = False
+
+    def area(piece):
+        b = _verts_to_bounds(piece["verts"])
+        return (b[2] - b[0]) * (b[3] - b[1]) if b else 0.0
+
+    for cluster in clusters:
+        members = [pieces[i] for i in cluster]
+        fills = [f for m in members for f in m["fills"]]
+        # убираем логотип во всех копиях (оставляя только трансформ группы)
+        for m in members:
+            g = m["g"]
+            key = "it" if "it" in g else "shapes"
+            g[key] = [x for x in g.get(key, []) if isinstance(x, dict) and x.get("ty") == "tr"]
+
+        valid = [m for m in members if _mat_inv(m["M"]) is not None and area(m) > 1.0]
+        if not valid:
+            continue
+        gb = _verts_to_bounds([v for m in valid for v in m["verts"]])
+        primary = min(valid, key=lambda m: (m["root"], -area(m)))
+        minv = _mat_inv(primary["M"])
+        if minv is None:
+            continue
+        gx1, gy1, gx2, gy2 = gb
+        corners = [_mat_apply(minv, x, y)
+                   for x, y in ((gx1, gy1), (gx2, gy1), (gx2, gy2), (gx1, gy2))]
+        lx1 = min(c[0] for c in corners)
+        lx2 = max(c[0] for c in corners)
+        ly1 = min(c[1] for c in corners)
+        ly2 = max(c[1] for c in corners)
+        cx, cy = (lx1 + lx2) / 2.0, (ly1 + ly2) / 2.0
+        height = max(abs(ly2 - ly1), 5.0)
+        max_width = max(abs(lx2 - lx1) * 1.4, 5.0)
         ns = _text_to_lottie_shapes(new_text, font_path, cx, cy, height, max_width=max_width)
         if not ns:
             continue
+        color = _choose_logo_text_color(lottie, fills, target_groups)
+        fill = {"ty": "fl", "c": {"a": 0, "k": color},
+                "o": {"a": 0, "k": 100}, "r": 1, "nm": "Fill 1"}
+        g = primary["g"]
         key = "it" if "it" in g else "shapes"
-        items = g.get(key, [])
-        tr = [x for x in items if isinstance(x, dict) and x.get("ty") == "tr"]
-        fill = _pick_logo_fill(g)
-        if fill is None:
-            fill = {
-                "ty": "fl", "c": {"a": 0, "k": [0.34, 1.0, 0.62, 1]},
-                "o": {"a": 0, "k": 100}, "r": 1, "nm": "Fill 1",
-            }
+        tr = [x for x in g.get(key, []) if isinstance(x, dict) and x.get("ty") == "tr"]
         g[key] = ns + [fill] + tr
+        g["nm"] = _JELLY_TEXT_NM  # защищаем от последующего удаления по имени
         changed = True
-    return changed
+    # логотипы найдены и как минимум вырезаны — это всегда изменение
+    return changed or bool(pieces)
 
 
 def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
@@ -1426,18 +1626,19 @@ def modify_lottie(lottie: dict, new_text: str, font_path: str = None) -> bool:
     if _remove_empty_text_layers(lottie):
         changed = True
 
+    # v0.5.0: запечённые фирменные логотипы (маркетплейс-паки без имён) —
+    # вырезаем каждый экземпляр и ставим на его место текстовую группу.
+    # Делаем это ДО name-based удаления, чтобы вписать текст в группы логотипа,
+    # которые иначе были бы просто удалены по имени (svg_item/svg_outline/…).
+    had_logo = _replace_logo_glyphs(lottie, new_text, font_path)
+    if had_logo:
+        changed = True
+
     if _remove_logo_elements(lottie):
         changed = True
 
-    # v0.4.0: запечённые фирменные логотипы (маркетплейс-паки без имён) —
-    # пересобираем каждый глиф в текстовую группу пользователя.
-    logo_groups = _find_logo_glyph_groups(lottie)
-    if logo_groups:
-        if _replace_logo_glyphs(lottie, new_text, font_path, logo_groups):
-            changed = True
-
     targets = _find_text_targets(lottie)
-    if not targets and not logo_groups:
+    if not targets and not had_logo:
         _add_default_text_layer(lottie)
         changed = True
         
