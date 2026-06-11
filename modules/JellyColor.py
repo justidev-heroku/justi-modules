@@ -1,7 +1,9 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.5.6                      ║
+# ║                        🎨 JellyColor v4.6.0                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.5.6: Убран дубль текста при наличии готового плейсхолдера    ║
+# ║  v4.6.0: Перекраска по нормализованному тону (чинит чёрный +     ║
+# ║          лучше ложится на эмодзи); градиент = плавная маска      ║
+# ║          поверх всех слоёв по позиции, а не 3-цветный ремап      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +34,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 5, 6)
+__version__ = (4, 6, 0)
 
 import asyncio
 import glob
@@ -50,7 +52,7 @@ import urllib.request
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageStat
 
 from telethon.tl import functions, types
 from telethon.tl.types import (
@@ -197,18 +199,73 @@ def rgb_to_hex(r: int, g: int, b: int) -> str:
 
 # ─── Image tinting ────────────────────────────────────────────────────────────
 
+_TONE_FLOOR = 0.30
+
+
+def _luma_channel(img: Image.Image) -> Tuple[Image.Image, Image.Image]:
+    """Возвращает (L, alpha): перцептивную яркость (ITU-R 601) и альфа-канал."""
+    img = img.convert("RGBA")
+    r, g, b, a = img.split()
+    L = Image.merge("RGB", (r, g, b)).convert("L")
+    return L, a
+
+
+def _luma_range(L: Image.Image, a: Image.Image) -> Tuple[int, int]:
+    """Диапазон яркости [lo, hi] по непрозрачным пикселям (0..255).
+
+    Нужен чтобы «привязать» перекраску к реальному тону спрайта, а не к
+    абсолютной яркости. Для плоских (монотонных) силуэтов lo≈hi — тогда
+    весь спрайт заливается целевым цветом, что и чинит баг с чёрными эмодзи.
+    """
+    try:
+        mask = a.point(lambda x: 255 if x > 16 else 0)
+        hist = L.histogram(mask=mask)
+        nz = [i for i, c in enumerate(hist) if c > 0]
+        if nz:
+            return nz[0], nz[-1]
+    except Exception:
+        pass
+    return 0, 255
+
+
+def _tone_factor_lut(lo: int, hi: int, floor: float = _TONE_FLOOR) -> List[float]:
+    """LUT нормализованного коэффициента яркости floor..1 для входа L (0..255).
+
+    Тени спрайта → floor (тёмный оттенок целевого цвета), светлые → 1 (полный
+    цвет). Плоский силуэт (hi-lo мал) → коэффициент 1 везде (сплошная заливка).
+    """
+    rng = hi - lo
+    lut = []
+    for i in range(256):
+        if rng <= 4:
+            n = 1.0
+        else:
+            n = (i - lo) / rng
+            n = 0.0 if n < 0 else 1.0 if n > 1 else n
+        lut.append(floor + (1.0 - floor) * n)
+    return lut
+
+
 def tint_image(img: Image.Image, hex_color: str) -> Image.Image:
+    """Перекраска спрайта в один цвет с сохранением внутренних теней/бликов.
+
+    v4.6: вместо умножения целевого цвета на абсолютную яркость (из-за чего
+    тёмные/чёрные эмодзи не перекрашивались вовсе) — нормализуем яркость по
+    реальному диапазону спрайта и накладываем целевой цвет в диапазоне
+    floor..полный. Чёрный/белый силуэт получает сплошную заливку, детальный
+    эмодзи сохраняет светотень.
+    """
     r_target, g_target, b_target = hex_to_rgb(hex_color)
     img = img.convert("RGBA")
-    r, g, b, ao = img.split()
-    max_rg = ImageChops.lighter(r, g)
-    val = ImageChops.lighter(max_rg, b)
-    lut_r = [int(i * r_target / 255) for i in range(256)]
-    lut_g = [int(i * g_target / 255) for i in range(256)]
-    lut_b = [int(i * b_target / 255) for i in range(256)]
-    rn = val.point(lut_r)
-    gn = val.point(lut_g)
-    bn = val.point(lut_b)
+    L, ao = _luma_channel(img)
+    lo, hi = _luma_range(L, ao)
+    fac = _tone_factor_lut(lo, hi)
+    lut_r = [min(255, int(round(r_target * f))) for f in fac]
+    lut_g = [min(255, int(round(g_target * f))) for f in fac]
+    lut_b = [min(255, int(round(b_target * f))) for f in fac]
+    rn = L.point(lut_r)
+    gn = L.point(lut_g)
+    bn = L.point(lut_b)
     return Image.merge("RGBA", (rn, gn, bn, ao))
 
 
@@ -282,14 +339,23 @@ def create_gradient_image(width: int, height: int, colors_hex: list, direction: 
 
 
 def tint_image_gradient(img: Image.Image, colors_hex: list, direction: str) -> Image.Image:
+    """Накладывает плавный градиент-маску ПОВЕРХ всего спрайта.
+
+    v4.6: цвет каждого пикселя берётся из пространственного градиента (по его
+    позиции), а светотень спрайта сохраняется через нормализованный
+    коэффициент floor..1. То есть это именно маска с плавным градиентом поверх
+    всех слоёв, а не перекраска в N опорных цветов.
+    """
     img = img.convert("RGBA")
     w, h = img.size
-    r, g, b, ao = img.split()
-    max_rg = ImageChops.lighter(r, g)
-    val = ImageChops.lighter(max_rg, b)
-    grad_img = create_gradient_image(w, h, colors_hex, direction)
-    val_rgb = Image.merge("RGB", (val, val, val))
-    tinted_rgb = ImageChops.multiply(grad_img, val_rgb)
+    L, ao = _luma_channel(img)
+    lo, hi = _luma_range(L, ao)
+    fac = _tone_factor_lut(lo, hi)
+    fac_lut = [min(255, int(round(f * 255))) for f in fac]
+    fmap = L.point(fac_lut)
+    grad_img = create_gradient_image(w, h, colors_hex, direction).convert("RGB")
+    fmap_rgb = Image.merge("RGB", (fmap, fmap, fmap))
+    tinted_rgb = ImageChops.multiply(grad_img, fmap_rgb)
     tr, tg, tb = tinted_rgb.split()
     return Image.merge("RGBA", (tr, tg, tb, ao))
 
@@ -384,306 +450,244 @@ def _collect_lottie_brightnesses(lottie_json: dict) -> Tuple[float, float]:
     return min(bs), max(bs)
 
 
+def _contrast_tone(gray: float, target_norm: Tuple[float, float, float],
+                   lo: float, hi: float, floor: float = _TONE_FLOOR) -> Tuple[float, float, float]:
+    """Накладывает целевой цвет (0..1) на яркость gray (0..1) с сохранением тона.
+
+    gray нормализуется по диапазону [lo, hi]: тени → floor*цвет, света → цвет.
+    Плоский монотон (hi≈lo) → сплошной целевой цвет — это и чинит чёрные эмодзи,
+    у которых нет внутренней светотени для умножения.
+    """
+    tr, tg, tb = target_norm
+    rng = hi - lo
+    if rng <= 0.02:
+        n = 1.0
+    else:
+        n = (gray - lo) / rng
+        n = 0.0 if n < 0 else 1.0 if n > 1 else n
+    f = floor + (1.0 - floor) * n
+    return tr * f, tg * f, tb * f
+
+
+def _gray_of(rgb: list) -> float:
+    return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+
+
+def _recolor_prop_tone(prop: dict, tone) -> None:
+    """Перекрашивает color-property {a, k} fl/st через tone(gray)->(r,g,b)."""
+    if not isinstance(prop, dict):
+        return
+    k = prop.get("k")
+    if not isinstance(k, list):
+        return
+    if len(k) >= 3 and isinstance(k[0], (int, float)):
+        alpha = k[3] if len(k) > 3 else 1.0
+        nr, ng, nb = tone(_gray_of(k))
+        prop["k"] = [nr, ng, nb, alpha]
+    else:
+        for kf in k:
+            if not isinstance(kf, dict):
+                continue
+            for field in ("s", "e"):
+                v = kf.get(field)
+                if isinstance(v, list) and len(v) >= 3 and isinstance(v[0], (int, float)):
+                    alpha = v[3] if len(v) > 3 else 1.0
+                    nr, ng, nb = tone(_gray_of(v))
+                    kf[field] = [nr, ng, nb, alpha]
+
+
+def _recolor_grad_stops_tone(raw: list, p: int, tone) -> list:
+    """Перекрашивает цветовые стопы gradient fill/stroke. Alpha-стопы не трогаются."""
+    color_len = p * 4
+    if len(raw) < color_len:
+        color_len = (len(raw) // 4) * 4
+    new_raw = list(raw)
+    i = 0
+    while i + 3 < color_len:
+        nr, ng, nb = tone(_gray_of(new_raw[i + 1: i + 4]))
+        new_raw[i + 1] = nr
+        new_raw[i + 2] = ng
+        new_raw[i + 3] = nb
+        i += 4
+    return new_raw
+
+
+def _recolor_grad_obj_tone(g_obj: dict, tone) -> None:
+    """Перекрашивает gradient-объект {p, k} gf/gs через tone(gray)->(r,g,b)."""
+    if not isinstance(g_obj, dict):
+        return
+    p = int(g_obj.get("p", 0))
+    if p == 0:
+        return
+    k_prop = g_obj.get("k")
+    if not isinstance(k_prop, dict):
+        return
+    raw = k_prop.get("k")
+    if not isinstance(raw, list):
+        return
+    if raw and isinstance(raw[0], (int, float)):
+        k_prop["k"] = _recolor_grad_stops_tone(raw, p, tone)
+    else:
+        for kf in raw:
+            if not isinstance(kf, dict):
+                continue
+            for field in ("s", "e"):
+                val = kf.get(field)
+                if isinstance(val, list) and val and isinstance(val[0], (int, float)):
+                    kf[field] = _recolor_grad_stops_tone(val, p, tone)
+
+
+def _recolor_fills_in(items: list, tone) -> None:
+    """Перекрашивает все прямые fl/st/gf/gs в списке items через tone."""
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        ty = it.get("ty")
+        if ty in ("fl", "st"):
+            _recolor_prop_tone(it.get("c", {}), tone)
+        elif ty in ("gf", "gs"):
+            _recolor_grad_obj_tone(it.get("g"), tone)
+
+
 def apply_gradient_lottie(lottie_json: dict, gradient: dict) -> dict:
-    """Умная перекраска TGS с градиентом.
+    """Накладывает плавный градиент-маску ПОВЕРХ всех слоёв эмодзи.
 
-    v3.1 — полностью переработан:
-    Старый алгоритм (v3) заменял ВСЕ fl/st/gf/gs одним градиентным fill —
-    это уничтожало внутреннюю структуру эмодзи (тени, блики, детали).
+    v4.6 — переработан под «маску с плавным градиентом»:
+    Старый алгоритм (v3.1) ремапил цвет каждого слоя по его ЯРКОСТИ, из-за чего
+    эмодзи распадался на 3 опорных цвета градиента без пространственной связности.
 
-    Новый алгоритм — brightness remapping:
-    1. Собирает все цвета по всему Lottie и находит глобальный диапазон яркости
-    2. Для каждого цвета вычисляет его нормализованную яркость t ∈ [0, 1]
-    3. Заменяет цвет на gradient.sample(t) — сэмпл градиента в этой позиции
-    4. Тёмные детали → тёмный конец градиента; светлые → светлый конец
-    5. Все внутренние соотношения яркостей (тени, блики) сохраняются
-    6. Для gradient fills (gf/gs) — каждый стоп ремапируется отдельно
-    7. Для анимированных keyframes — каждый кадр ремапируется (поддержка s-only формата)
+    Новый алгоритм — пространственный градиент по позиции шейпа:
+    1. Находит все группы-шейпы (gr) с заливкой и геометрией.
+    2. Для каждой группы считает центроид её путей и общий bounding box сцены.
+    3. Сэмплирует градиент в позиции центроида (по направлению dir) → цвет группы.
+    4. Заливает группу этим цветом с сохранением её светотени (_contrast_tone).
+    Итог — плавный градиент, «положенный» поверх всего эмодзи по координатам,
+    а не перекраска в N цветов. Если геометрию извлечь не удалось — fallback на
+    яркостный ремап, чтобы что-то всё равно покрасилось.
     """
     colors_hex = gradient["colors"]
+    direction = gradient.get("dir", "d")
     b_min, b_max = _collect_lottie_brightnesses(lottie_json)
-    b_range = b_max - b_min if b_max > b_min else 1.0
 
-    def _t(rgb: list) -> float:
-        """Нормализованная яркость цвета → позиция в градиенте [0, 1]."""
-        if len(rgb) < 3 or not isinstance(rgb[0], (int, float)):
-            return 0.5
-        bv = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
-        return (bv - b_min) / b_range
+    groups = []  # (items_list, cx, cy)
 
-    def _remap(rgb: list) -> list:
-        """Ремапирует [r,g,b,?] в цвет градиента по яркости. Alpha сохраняется."""
-        nr, ng, nb = _sample_gradient(_t(rgb), colors_hex)
-        alpha = rgb[3] if len(rgb) > 3 else 1.0
-        return [nr, ng, nb, alpha]
-
-    def _remap_grad_stops(raw: list, p: int) -> list:
-        """Ремапирует цветовые стопы gradient fill/stroke по яркости.
-        Alpha-стопы (после p*4) не трогаются.
-        """
-        color_len = p * 4
-        if len(raw) < color_len:
-            color_len = (len(raw) // 4) * 4
-        new_raw = list(raw)
-        i = 0
-        while i + 3 < color_len:
-            nr, ng, nb = _sample_gradient(_t(new_raw[i + 1: i + 4]), colors_hex)
-            new_raw[i + 1] = nr
-            new_raw[i + 2] = ng
-            new_raw[i + 3] = nb
-            i += 4
-        return new_raw
-
-    def _recolor_prop(prop: dict) -> None:
-        """Ремапирует color-property {a, k} fl/st шейпа."""
-        if not isinstance(prop, dict):
-            return
-        k = prop.get("k")
-        if k is None:
-            return
-        if isinstance(k, list):
-            if len(k) >= 3 and isinstance(k[0], (int, float)):
-                prop["k"] = _remap(k)
-            else:
-                for kf in k:
-                    if not isinstance(kf, dict):
-                        continue
-                    vs = kf.get("s")
-                    if isinstance(vs, list) and len(vs) >= 3 and isinstance(vs[0], (int, float)):
-                        kf["s"] = _remap(vs)
-                    ve = kf.get("e")
-                    if isinstance(ve, list) and len(ve) >= 3 and isinstance(ve[0], (int, float)):
-                        kf["e"] = _remap(ve)
-
-    def _recolor_grad_obj(g_obj: dict) -> None:
-        """Ремапирует gradient-объект {p, k} gf/gs шейпа."""
-        if not isinstance(g_obj, dict):
-            return
-        p = int(g_obj.get("p", 0))
-        if p == 0:
-            return
-        k_prop = g_obj.get("k")
-        if not isinstance(k_prop, dict):
-            return
-        raw = k_prop.get("k")
-        if raw is None:
-            return
-        if isinstance(raw, list) and raw and isinstance(raw[0], (int, float)):
-            k_prop["k"] = _remap_grad_stops(raw, p)
-        elif isinstance(raw, list):
-            for kf in raw:
-                if not isinstance(kf, dict):
-                    continue
-                for field in ("s", "e"):
-                    val = kf.get(field)
-                    if isinstance(val, list) and val and isinstance(val[0], (int, float)):
-                        kf[field] = _remap_grad_stops(val, p)
-
-    def _walk(obj):
+    def _find_groups(obj):
         if isinstance(obj, dict):
-            ty = obj.get("ty", "")
-            if ty in ("fl", "st"):
-                _recolor_prop(obj.get("c", {}))
-                return
-            if ty in ("gf", "gs"):
-                _recolor_grad_obj(obj.get("g"))
-                return
-            # Solid color layer
-            sc = obj.get("sc")
-            if isinstance(sc, str) and sc.startswith("#"):
-                try:
-                    sr, sg, sb = hex_to_rgb(sc)
-                    nr, ng, nb = _sample_gradient(_t([sr / 255, sg / 255, sb / 255]), colors_hex)
-                    obj["sc"] = rgb_to_hex(int(nr * 255), int(ng * 255), int(nb * 255))
-                except Exception:
-                    pass
-            # Text layer
-            t_obj = obj.get("t")
-            if isinstance(t_obj, dict):
-                d_obj = t_obj.get("d")
-                if isinstance(d_obj, dict):
-                    for kf in d_obj.get("k", []):
-                        if isinstance(kf, dict):
-                            s_obj = kf.get("s", {})
-                            if isinstance(s_obj, dict):
-                                for field in ("fc", "sc"):
-                                    col = s_obj.get(field)
-                                    if isinstance(col, list) and len(col) >= 3:
-                                        nr, ng, nb = _sample_gradient(_t(col), colors_hex)
-                                        alpha = col[3] if len(col) > 3 else 1.0
-                                        s_obj[field] = [nr, ng, nb, alpha]
+            if obj.get("ty") == "gr":
+                items = obj.get("it", obj.get("shapes", []))
+                if isinstance(items, list):
+                    has_fill = any(isinstance(x, dict) and x.get("ty") in ("fl", "st", "gf", "gs") for x in items)
+                    has_geo = any(isinstance(x, dict) and x.get("ty") in ("sh", "el", "rc", "sr") for x in items)
+                    if has_fill and (has_geo or any(isinstance(x, dict) and x.get("ty") == "gr" for x in items)):
+                        verts = _collect_path_verts(obj)
+                        if verts:
+                            xs = [v[0] for v in verts]
+                            ys = [v[1] for v in verts]
+                            groups.append((items, sum(xs) / len(xs), sum(ys) / len(ys)))
             for v in obj.values():
-                _walk(v)
+                _find_groups(v)
         elif isinstance(obj, list):
             for item in obj:
-                _walk(item)
+                _find_groups(item)
 
-    _walk(lottie_json)
+    _find_groups(lottie_json)
+
+    if not groups:
+        # Fallback: яркостный ремап (старое поведение) — чтобы хоть как-то покрасить.
+        b_range = b_max - b_min if b_max > b_min else 1.0
+
+        def _tone_bright(gray: float):
+            t = (gray - b_min) / b_range
+            return _sample_gradient(t, colors_hex)
+
+        def _walk(obj):
+            if isinstance(obj, dict):
+                ty = obj.get("ty", "")
+                if ty in ("fl", "st"):
+                    _recolor_prop_tone(obj.get("c", {}), _tone_bright)
+                    return
+                if ty in ("gf", "gs"):
+                    _recolor_grad_obj_tone(obj.get("g"), _tone_bright)
+                    return
+                for v in obj.values():
+                    _walk(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _walk(item)
+
+        _walk(lottie_json)
+        return lottie_json
+
+    xs = [g[1] for g in groups]
+    ys = [g[2] for g in groups]
+    minx, maxx = min(xs), max(xs)
+    miny, maxy = min(ys), max(ys)
+
+    def _pos_t(cx: float, cy: float) -> float:
+        rx = (cx - minx) / (maxx - minx) if maxx > minx else 0.5
+        ry = (cy - miny) / (maxy - miny) if maxy > miny else 0.5
+        if direction == "h":
+            return rx
+        if direction == "v":
+            return ry
+        if direction == "dr":
+            return ((1.0 - rx) + ry) / 2.0
+        return (rx + ry) / 2.0  # d / default
+
+    for items, cx, cy in groups:
+        gr_col = _sample_gradient(_pos_t(cx, cy), colors_hex)
+
+        def _tone(gray, _c=gr_col):
+            return _contrast_tone(gray, _c, b_min, b_max)
+
+        _recolor_fills_in(items, _tone)
+
     return lottie_json
 
 
 # ─── Lottie tinting ───────────────────────────────────────────────────────────
 
-def _recolor_rgb(val: list, nr: float, ng: float, nb: float) -> list:
-    """Перекрашивает [r,g,b] или [r,g,b,a] через grayscale-умножение. Alpha сохраняется."""
-    if len(val) < 3 or not isinstance(val[0], (int, float)):
-        return val
-    gray = 0.299 * val[0] + 0.587 * val[1] + 0.114 * val[2]
-    alpha = val[3] if len(val) > 3 else 1.0
-    return [nr * gray, ng * gray, nb * gray, alpha]
-
-
-def _recolor_gradient_stops(raw: list, p: int, nr: float, ng: float, nb: float) -> list:
-    """
-    Перекрашивает массив Lottie gradient stops на месте (возвращает новый список).
-
-    Формат Lottie градиента (НЕ просто [off,r,g,b,...]):
-      Первые p*4 значений — цветовые стопы: [off, r, g, b,  off, r, g, b, ...]
-      Следующие p*2 значений (если есть) — альфа-стопы: [off, a,  off, a, ...]
-
-    Цветовые стопы перекрашиваются через grayscale-умножение.
-    Альфа-стопы НЕ трогаются (они управляют прозрачностью отдельно).
-    """
-    color_len = p * 4
-    if len(raw) < color_len:
-        # Fallback: нестандартный формат — красим по 4 значения
-        color_len = (len(raw) // 4) * 4
-
-    new_raw = list(raw)
-    i = 0
-    while i + 3 < color_len:
-        off = new_raw[i]
-        gray = 0.299 * new_raw[i+1] + 0.587 * new_raw[i+2] + 0.114 * new_raw[i+3]
-        new_raw[i+1] = nr * gray
-        new_raw[i+2] = ng * gray
-        new_raw[i+3] = nb * gray
-        i += 4
-    # Alpha-блок (индексы color_len..end) — не трогаем
-    return new_raw
-
-
 def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
     """
-    Полная перекраска TGS: fl, st, gf, gs (включая анимированные keyframes).
+    Полная перекраска TGS в один цвет: fl, st, gf, gs, solid (sc), текст,
+    включая анимированные keyframes (s и e — e только в старом формате AE<2022).
 
-    v3 fixes:
-      • Stroke (ty=st) — v2 вообще не красила
-      • Gradient fill/stroke (gf/gs) — v2 не красила вообще
-      • Animated fl/st: v2 патчила только s, v3 патчит s (+ e в старом формате)
-      • Animated gf/gs: v2 не красила вовсе
-      • Solid color layer (поле sc="#rrggbb") — v2 не трогала
-      • Text layer (t.d.k[].s.fc / .sc) — v2 не трогала
-
-    v3.1 fix (ГЛАВНЫЙ БАГ):
-      Lottie формат After Effects 2022+ использует keyframes ТОЛЬКО с полем 's'.
-      Поле 'e' (end value) отсутствует во всех современных TGS-файлах Telegram.
-      v3 пыталась патчить 'e' которого нет → анимированные цвета не красились.
-      v3.1: патчит 's' всегда; 'e' — только если присутствует (AE < 2022).
+    v4.6 (ГЛАВНЫЙ ФИКС перекраски):
+      Старый алгоритм умножал целевой цвет на абсолютную яркость пикселя/цвета.
+      Из-за этого тёмные и чёрные эмодзи (шаблоны «Чёрные») вообще не
+      перекрашивались — яркость ≈0, цвет × 0 = чёрный.
+      Теперь яркость нормализуется по диапазону всех заливок эмодзи и целевой
+      цвет накладывается в диапазоне floor..полный (_contrast_tone). Монотонный
+      силуэт получает сплошную заливку, детальный эмодзи сохраняет светотень.
     """
     r, g, b = hex_to_rgb(hex_color)
-    nr, ng, nb = r / 255, g / 255, b / 255
+    tnorm = (r / 255, g / 255, b / 255)
+    b_min, b_max = _collect_lottie_brightnesses(lottie_json)
 
-    def _recolor_prop(prop: dict) -> None:
-        """Перекрашивает color-property {a, k} — плоский цвет (fl/st).
-
-        Поддерживает оба формата Lottie:
-          - Старый (AE < 2022): keyframes с полями s и e
-          - Новый (AE >= 2022): keyframes только с полем s (без e)
-            В новом формате «end value» следующего keyframe = s следующего kf.
-        """
-        if not isinstance(prop, dict):
-            return
-        k = prop.get("k")
-        if k is None:
-            return
-        if isinstance(k, list):
-            if len(k) >= 3 and isinstance(k[0], (int, float)):
-                # Static [r,g,b] или [r,g,b,a]
-                prop["k"] = _recolor_rgb(k, nr, ng, nb)
-            else:
-                # Animated keyframes — патчим s (и e если есть, старый формат)
-                for kf in k:
-                    if not isinstance(kf, dict):
-                        continue
-                    # 's' — значение в начале этого keyframe (есть всегда кроме последнего sentinel)
-                    val_s = kf.get("s")
-                    if isinstance(val_s, list) and len(val_s) >= 3 and isinstance(val_s[0], (int, float)):
-                        kf["s"] = _recolor_rgb(val_s, nr, ng, nb)
-                    # 'e' — только в старом формате Lottie (AE < 2022)
-                    val_e = kf.get("e")
-                    if isinstance(val_e, list) and len(val_e) >= 3 and isinstance(val_e[0], (int, float)):
-                        kf["e"] = _recolor_rgb(val_e, nr, ng, nb)
-
-    def _recolor_grad_obj(g_obj: dict) -> None:
-        """
-        Перекрашивает gradient-объект {p, k} из gf/gs.
-        g_obj["p"] — количество цветовых стопов (нужно для разделения цвет/альфа).
-        g_obj["k"] — property-объект {a, k: [...stops...]}.
-
-        Поддерживает оба Lottie формата:
-          - Старый: keyframes с s и e
-          - Новый (AE >= 2022): keyframes только с s (нет поля e)
-        """
-        if not isinstance(g_obj, dict):
-            return
-        p = int(g_obj.get("p", 0))
-        if p == 0:
-            return
-        k_prop = g_obj.get("k")
-        if not isinstance(k_prop, dict):
-            return
-        raw = k_prop.get("k")
-        if raw is None:
-            return
-
-        if isinstance(raw, list) and raw and isinstance(raw[0], (int, float)):
-            # Static gradient stops
-            k_prop["k"] = _recolor_gradient_stops(raw, p, nr, ng, nb)
-        elif isinstance(raw, list):
-            # Animated keyframes: патчим поля s и e (e только в старом формате)
-            for kf in raw:
-                if not isinstance(kf, dict):
-                    continue
-                for field in ("s", "e"):
-                    val = kf.get(field)
-                    if isinstance(val, list) and val and isinstance(val[0], (int, float)):
-                        kf[field] = _recolor_gradient_stops(val, p, nr, ng, nb)
+    def _tone(gray: float):
+        return _contrast_tone(gray, tnorm, b_min, b_max)
 
     def _walk(obj):
         if isinstance(obj, dict):
             ty = obj.get("ty", "")
 
-            # Shape fill — плоский цвет
-            if ty == "fl":
-                _recolor_prop(obj.get("c", {}))
+            # Shape fill / stroke — плоский цвет
+            if ty in ("fl", "st"):
+                _recolor_prop_tone(obj.get("c", {}), _tone)
                 return
 
-            # Shape stroke — плоский цвет (v2 пропускала!)
-            if ty == "st":
-                _recolor_prop(obj.get("c", {}))
+            # Gradient fill / stroke
+            if ty in ("gf", "gs"):
+                _recolor_grad_obj_tone(obj.get("g"), _tone)
                 return
 
-            # Gradient fill (v2 пропускала; v3 учитывает g.p для альфа-стопов)
-            if ty == "gf":
-                _recolor_grad_obj(obj.get("g"))
-                return
-
-            # Gradient stroke (v2 пропускала)
-            if ty == "gs":
-                _recolor_grad_obj(obj.get("g"))
-                return
-
-            # Solid color layer: поле "sc" = "#rrggbb" (layer ty=1 в Lottie — число)
+            # Solid color layer: поле "sc" = "#rrggbb"
             sc_val = obj.get("sc")
             if isinstance(sc_val, str) and sc_val.startswith("#"):
                 try:
                     sr, sg, sb = hex_to_rgb(sc_val)
-                    gray = 0.299 * sr/255 + 0.587 * sg/255 + 0.114 * sb/255
-                    obj["sc"] = rgb_to_hex(
-                        int(nr * gray * 255),
-                        int(ng * gray * 255),
-                        int(nb * gray * 255),
-                    )
+                    nr2, ng2, nb2 = _tone(_gray_of([sr / 255, sg / 255, sb / 255]))
+                    obj["sc"] = rgb_to_hex(int(nr2 * 255), int(ng2 * 255), int(nb2 * 255))
                 except Exception:
                     pass
 
@@ -699,9 +703,9 @@ def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
                                 for field in ("fc", "sc"):
                                     col = s_obj.get(field)
                                     if isinstance(col, list) and len(col) >= 3:
-                                        gray = 0.299 * col[0] + 0.587 * col[1] + 0.114 * col[2]
                                         alpha = col[3] if len(col) > 3 else 1.0
-                                        s_obj[field] = [nr*gray, ng*gray, nb*gray, alpha]
+                                        nr2, ng2, nb2 = _tone(_gray_of(col))
+                                        s_obj[field] = [nr2, ng2, nb2, alpha]
 
             # Рекурсия по остальным полям
             for v in obj.values():
