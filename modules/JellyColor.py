@@ -1,9 +1,9 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.6.0                      ║
+# ║                        🎨 JellyColor v4.6.1                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.6.0: Перекраска по нормализованному тону (чинит чёрный +     ║
-# ║          лучше ложится на эмодзи); градиент = плавная маска      ║
-# ║          поверх всех слоёв по позиции, а не 3-цветный ремап      ║
+# ║  v4.6.1: Градиент = настоящий Lottie gradient-fill на каждом     ║
+# ║          элементе (плавно, чинит чёрные слои); тон-перекраска    ║
+# ║          по диапазону яркости (чинит чёрный); fix анимир. путей  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -34,7 +34,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 6, 0)
+__version__ = (4, 6, 1)
 
 import asyncio
 import glob
@@ -537,111 +537,160 @@ def _recolor_grad_obj_tone(g_obj: dict, tone) -> None:
                     kf[field] = _recolor_grad_stops_tone(val, p, tone)
 
 
-def _recolor_fills_in(items: list, tone) -> None:
-    """Перекрашивает все прямые fl/st/gf/gs в списке items через tone."""
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        ty = it.get("ty")
-        if ty in ("fl", "st"):
-            _recolor_prop_tone(it.get("c", {}), tone)
-        elif ty in ("gf", "gs"):
-            _recolor_grad_obj_tone(it.get("g"), tone)
+def _gradient_stops(colors_hex: list) -> Tuple[list, int]:
+    """Стопы Lottie-градиента: [off, r, g, b, off, r, g, b, ...] и их количество."""
+    n = len(colors_hex)
+    stops = []
+    for i, c in enumerate(colors_hex):
+        off = i / (n - 1) if n > 1 else 0.0
+        r, g, b = hex_to_rgb(c)
+        stops += [off, r / 255.0, g / 255.0, b / 255.0]
+    return stops, max(n, 1)
+
+
+def _grad_endpoints(bounds: tuple, direction: str) -> Tuple[list, list]:
+    """Точки начала/конца линейного градиента по bbox шейпа (локальные коорд.)."""
+    minx, miny, maxx, maxy = bounds
+    cx = (minx + maxx) / 2.0
+    cy = (miny + maxy) / 2.0
+    if direction == "h":
+        return [minx, cy], [maxx, cy]
+    if direction == "v":
+        return [cx, miny], [cx, maxy]
+    if direction == "dr":
+        return [maxx, miny], [minx, maxy]
+    return [minx, miny], [maxx, maxy]  # d / default
+
+
+def _fl_to_gf(d: dict, bounds: tuple, colors_hex: list, direction: str) -> None:
+    """Превращает плоскую заливку (fl) в линейный градиент-fill (gf) по bbox."""
+    o = d.get("o", {"a": 0, "k": 100})
+    r_rule = d.get("r", 1)
+    nm = d.get("nm")
+    s, e = _grad_endpoints(bounds, direction)
+    stops, n = _gradient_stops(colors_hex)
+    d.clear()
+    d["ty"] = "gf"
+    if nm:
+        d["nm"] = nm
+    d["o"] = o
+    d["r"] = r_rule
+    d["t"] = 1  # linear
+    d["s"] = {"a": 0, "k": s}
+    d["e"] = {"a": 0, "k": e}
+    d["g"] = {"p": n, "k": {"a": 0, "k": stops}}
+
+
+def _st_to_gs(d: dict, bounds: tuple, colors_hex: list, direction: str) -> None:
+    """Превращает плоскую обводку (st) в градиент-обводку (gs) по bbox."""
+    o = d.get("o", {"a": 0, "k": 100})
+    w = d.get("w", {"a": 0, "k": 2})
+    lc = d.get("lc", 2)
+    lj = d.get("lj", 2)
+    nm = d.get("nm")
+    s, e = _grad_endpoints(bounds, direction)
+    stops, n = _gradient_stops(colors_hex)
+    d.clear()
+    d["ty"] = "gs"
+    if nm:
+        d["nm"] = nm
+    d["o"] = o
+    d["w"] = w
+    d["lc"] = lc
+    d["lj"] = lj
+    d["t"] = 1
+    d["s"] = {"a": 0, "k": s}
+    d["e"] = {"a": 0, "k": e}
+    d["g"] = {"p": n, "k": {"a": 0, "k": stops}}
+
+
+def _remap_existing_gradient(d: dict, colors_hex: list) -> None:
+    """Ремапит стопы уже существующего gf/gs в цвета нового градиента по offset."""
+    g = d.get("g")
+    if not isinstance(g, dict):
+        return
+    p = int(g.get("p", 0))
+    k_prop = g.get("k")
+    if p == 0 or not isinstance(k_prop, dict):
+        return
+    raw = k_prop.get("k")
+    if not isinstance(raw, list):
+        return
+
+    def _remap_static(stops):
+        color_len = p * 4
+        if len(stops) < color_len:
+            color_len = (len(stops) // 4) * 4
+        new = list(stops)
+        i = 0
+        while i + 3 < color_len:
+            cr, cg, cb = _sample_gradient(new[i], colors_hex)
+            new[i + 1], new[i + 2], new[i + 3] = cr, cg, cb
+            i += 4
+        return new
+
+    if raw and isinstance(raw[0], (int, float)):
+        k_prop["k"] = _remap_static(raw)
+    else:
+        for kf in raw:
+            if not isinstance(kf, dict):
+                continue
+            for field in ("s", "e"):
+                val = kf.get(field)
+                if isinstance(val, list) and val and isinstance(val[0], (int, float)):
+                    kf[field] = _remap_static(val)
 
 
 def apply_gradient_lottie(lottie_json: dict, gradient: dict) -> dict:
-    """Накладывает плавный градиент-маску ПОВЕРХ всех слоёв эмодзи.
+    """Накладывает настоящий плавный градиент на каждый элемент эмодзи.
 
-    v4.6 — переработан под «маску с плавным градиентом»:
-    Старый алгоритм (v3.1) ремапил цвет каждого слоя по его ЯРКОСТИ, из-за чего
-    эмодзи распадался на 3 опорных цвета градиента без пространственной связности.
+    v4.6.1 — переписан под реальный Lottie-градиент:
+    Прошлые версии либо ремапили цвета по ЯРКОСТИ (эмодзи распадался на N опорных
+    цветов), либо красили каждую группу одним усреднённым цветом (без плавности).
+    Обе версии ломались на многослойных эмодзи с анимированными трансформациями
+    (координаты шейпов лежат в локальном пространстве слоя, а не на холсте).
 
-    Новый алгоритм — пространственный градиент по позиции шейпа:
-    1. Находит все группы-шейпы (gr) с заливкой и геометрией.
-    2. Для каждой группы считает центроид её путей и общий bounding box сцены.
-    3. Сэмплирует градиент в позиции центроида (по направлению dir) → цвет группы.
-    4. Заливает группу этим цветом с сохранением её светотени (_contrast_tone).
-    Итог — плавный градиент, «положенный» поверх всего эмодзи по координатам,
-    а не перекраска в N цветов. Если геометрию извлечь не удалось — fallback на
-    яркостный ремап, чтобы что-то всё равно покрасилось.
+    Новый подход — конвертация заливок в Lottie gradient-fill (gf/gs):
+    1. Для каждой группы-шейпа берём bbox её путей в ЕЁ локальном пространстве
+       (тех же координатах, где живут точки заливки) — это безопасно при любых
+       трансформациях слоя.
+    2. Плоскую заливку fl → gf, обводку st → gs с линейным градиентом по bbox.
+    3. Уже существующие gf/gs ремапим в новые цвета по offset стопов.
+    Итог — каждый элемент покрыт настоящим плавным градиентом по направлению dir,
+    включая чёрные силуэты (раньше оставались чёрными).
     """
     colors_hex = gradient["colors"]
     direction = gradient.get("dir", "d")
-    b_min, b_max = _collect_lottie_brightnesses(lottie_json)
 
-    groups = []  # (items_list, cx, cy)
+    def _process_group(gr: dict) -> None:
+        items = gr.get("it")
+        if not isinstance(items, list):
+            items = gr.get("shapes")
+        if not isinstance(items, list):
+            return
+        bounds = _verts_to_bounds(_collect_path_verts(gr))
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            ty = it.get("ty")
+            if ty == "fl" and bounds:
+                _fl_to_gf(it, bounds, colors_hex, direction)
+            elif ty == "st" and bounds:
+                _st_to_gs(it, bounds, colors_hex, direction)
+            elif ty in ("gf", "gs"):
+                _remap_existing_gradient(it, colors_hex)
 
-    def _find_groups(obj):
+    def _walk(obj):
         if isinstance(obj, dict):
             if obj.get("ty") == "gr":
-                items = obj.get("it", obj.get("shapes", []))
-                if isinstance(items, list):
-                    has_fill = any(isinstance(x, dict) and x.get("ty") in ("fl", "st", "gf", "gs") for x in items)
-                    has_geo = any(isinstance(x, dict) and x.get("ty") in ("sh", "el", "rc", "sr") for x in items)
-                    if has_fill and (has_geo or any(isinstance(x, dict) and x.get("ty") == "gr" for x in items)):
-                        verts = _collect_path_verts(obj)
-                        if verts:
-                            xs = [v[0] for v in verts]
-                            ys = [v[1] for v in verts]
-                            groups.append((items, sum(xs) / len(xs), sum(ys) / len(ys)))
+                _process_group(obj)
             for v in obj.values():
-                _find_groups(v)
+                _walk(v)
         elif isinstance(obj, list):
             for item in obj:
-                _find_groups(item)
+                _walk(item)
 
-    _find_groups(lottie_json)
-
-    if not groups:
-        # Fallback: яркостный ремап (старое поведение) — чтобы хоть как-то покрасить.
-        b_range = b_max - b_min if b_max > b_min else 1.0
-
-        def _tone_bright(gray: float):
-            t = (gray - b_min) / b_range
-            return _sample_gradient(t, colors_hex)
-
-        def _walk(obj):
-            if isinstance(obj, dict):
-                ty = obj.get("ty", "")
-                if ty in ("fl", "st"):
-                    _recolor_prop_tone(obj.get("c", {}), _tone_bright)
-                    return
-                if ty in ("gf", "gs"):
-                    _recolor_grad_obj_tone(obj.get("g"), _tone_bright)
-                    return
-                for v in obj.values():
-                    _walk(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    _walk(item)
-
-        _walk(lottie_json)
-        return lottie_json
-
-    xs = [g[1] for g in groups]
-    ys = [g[2] for g in groups]
-    minx, maxx = min(xs), max(xs)
-    miny, maxy = min(ys), max(ys)
-
-    def _pos_t(cx: float, cy: float) -> float:
-        rx = (cx - minx) / (maxx - minx) if maxx > minx else 0.5
-        ry = (cy - miny) / (maxy - miny) if maxy > miny else 0.5
-        if direction == "h":
-            return rx
-        if direction == "v":
-            return ry
-        if direction == "dr":
-            return ((1.0 - rx) + ry) / 2.0
-        return (rx + ry) / 2.0  # d / default
-
-    for items, cx, cy in groups:
-        gr_col = _sample_gradient(_pos_t(cx, cy), colors_hex)
-
-        def _tone(gray, _c=gr_col):
-            return _contrast_tone(gray, _c, b_min, b_max)
-
-        _recolor_fills_in(items, _tone)
-
+    _walk(lottie_json)
     return lottie_json
 
 
@@ -980,7 +1029,11 @@ def _collect_path_verts(obj, target=None):
                 ks = o.get("ks", {})
                 k = ks.get("k", {})
                 if isinstance(k, list) and k and isinstance(k[0], dict):
+                    # Animated path: первый keyframe, поле 's'. В современном
+                    # формате 's' — это список, обёртывающий объект пути.
                     k = k[0].get("s", k[0])
+                    if isinstance(k, list) and k and isinstance(k[0], dict):
+                        k = k[0]
                 if isinstance(k, dict) and "v" in k:
                     for v in k["v"]:
                         tx, ty = float(v[0]), float(v[1])
