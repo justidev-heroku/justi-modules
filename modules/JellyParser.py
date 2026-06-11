@@ -1,9 +1,9 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🔮 JellyParser v0.4.0                     ║
+# ║                        🔮 JellyParser v0.4.1                     ║
 # ║           Парсер эмодзи-паков на наличие текстовых групп         ║
-# ║ v0.4.0: Распознавание запечённых SVG-логотипов маркетплейс-паков ║
-# ║         (@uMarketPlaceBot и др.) по геометрии и пересборка их     ║
-# ║         в текстовую группу пользователя                          ║
+# ║ v0.4.1: Фолбэк для паков с вырезанными именами групп (реэкспорт  ║
+# ║         через @EmojiSaverBot и др.) — поиск по сигнатуре          ║
+# ║         путей-глифов nm=="p"                                     ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -63,7 +63,7 @@ except ImportError:
 
 logger = logging.getLogger("JellyParser")
 
-__version__ = (0, 4, 0)
+__version__ = (0, 4, 1)
 
 PE = {
     "ok":      "5870633910337015697",
@@ -372,6 +372,21 @@ def _is_keyword_match(el):
     return _has_keyword_child(el)
 
 
+def _has_direct_glyph_path(group):
+    """True, если группа напрямую содержит пути-глифы JellyParser (sh nm=="p").
+
+    Маркетплейс-реэкспорты (например, через @EmojiSaverBot) теряют имена групп
+    ("textgroup"/"text"/…), но сохраняют сигнатуру путей-глифов nm=="p", которой
+    JellyParser помечает каждый отрисованный глиф (_text_to_lottie_shapes)."""
+    items = group.get("it", group.get("shapes", []))
+    if not isinstance(items, list):
+        return False
+    return any(
+        isinstance(x, dict) and x.get("ty") == "sh" and x.get("nm") == "p"
+        for x in items
+    )
+
+
 def _is_empty_text_layer(el):
     if el.get("ty") != 5:
         return False
@@ -406,6 +421,21 @@ def _find_text_targets(lottie):
         final_targets = []
         for cand in named_targets:
             if any(_is_descendant(t, cand) for t in named_targets if t is not cand):
+                continue
+            final_targets.append(cand)
+        return final_targets
+
+    # Fallback for name-stripped packs (marketplace re-exports): no keyword names
+    # survived, but JellyParser's glyph-path signature (sh nm=="p") did. Target the
+    # minimal groups that directly hold such paths.
+    glyph_targets = [
+        el for el in elements
+        if el.get("ty") == "gr" and _has_direct_glyph_path(el)
+    ]
+    if glyph_targets:
+        final_targets = []
+        for cand in glyph_targets:
+            if any(_is_descendant(t, cand) for t in glyph_targets if t is not cand):
                 continue
             final_targets.append(cand)
         return final_targets

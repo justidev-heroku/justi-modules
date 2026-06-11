@@ -1,8 +1,10 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.6.0                      ║
+# ║                        🎨 JellyColor v4.6.1                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
 # ║  v4.6.0: Переоформлён UI (история цветов, авто-название),        ║
 # ║          полностью убрана система градиентов                     ║
+# ║  v4.6.1: Текст-группа распознаётся в паках с вырезанными именами ║
+# ║          групп (реэкспорт @EmojiSaverBot) по сигнатуре nm=="p"   ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -33,7 +35,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 6, 0)
+__version__ = (4, 6, 1)
 
 import asyncio
 import glob
@@ -677,9 +679,24 @@ def _verts_to_bounds(verts):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def _has_direct_glyph_path(group):
+    """True, если группа напрямую содержит пути-глифы (sh nm=="p").
+
+    Маркетплейс-реэкспорты (например, через @EmojiSaverBot) теряют имена групп
+    ("textgroup"/"text"/…), но сохраняют сигнатуру nm=="p", которой
+    помечается каждый отрисованный глиф (_text_to_lottie_shapes)."""
+    items = group.get("it", group.get("shapes", []))
+    if not isinstance(items, list):
+        return False
+    return any(
+        isinstance(x, dict) and x.get("ty") == "sh" and x.get("nm") == "p"
+        for x in items
+    )
+
+
 def _get_textgroup_bounds(lottie):
     keywords = {"textgroup", "text", "letters", "emoji", "text shape", "emc", "logo", "label", "word", "txt", "title", "caption"}
-    
+
     def matches(name):
         if not name or not isinstance(name, str):
             return False
@@ -751,6 +768,24 @@ def _get_textgroup_bounds(lottie):
         final_targets = []
         for cand in named_targets:
             if any(is_descendant(t, cand) for t in named_targets if t is not cand):
+                continue
+            final_targets.append(cand)
+        if final_targets:
+            verts = _collect_path_verts(final_targets[0])
+            if verts:
+                return _verts_to_bounds(verts)
+
+    # 3. Fallback for name-stripped packs (marketplace re-exports): no keyword
+    # names survived, but the glyph-path signature (sh nm=="p") did. Use the
+    # minimal groups directly holding such paths to locate the real text bounds.
+    glyph_targets = [
+        el for el in elements
+        if el.get("ty") == "gr" and _has_direct_glyph_path(el)
+    ]
+    if glyph_targets:
+        final_targets = []
+        for cand in glyph_targets:
+            if any(is_descendant(t, cand) for t in glyph_targets if t is not cand):
                 continue
             final_targets.append(cand)
         if final_targets:
