@@ -1,7 +1,8 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.5.6                      ║
+# ║                        🎨 JellyColor v4.6.0                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.5.6: Убран дубль текста при наличии готового плейсхолдера    ║
+# ║  v4.6.0: Переоформлён UI (история цветов, авто-название),        ║
+# ║          полностью убрана система градиентов                     ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -32,7 +33,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 5, 7)
+__version__ = (4, 6, 0)
 
 import asyncio
 import glob
@@ -143,22 +144,6 @@ PE = {
     "back":    "5445362436418859744",
 }
 
-# ─── Gradient presets ────────────────────────────────────────────────────────
-GRADIENT_PRESETS = [
-    {"id":"sunset",    "name":"🌅 Закат",      "colors":["#FF416C","#FF4B2B"], "dir":"d"},
-    {"id":"ocean",     "name":"🌊 Океан",      "colors":["#1A2980","#26D0CE"], "dir":"dr"},
-    {"id":"aurora",    "name":"📣 Аврора",     "colors":["#00C9FF","#92FE9D"], "dir":"d"},
-    {"id":"fire",      "name":"🔥 Огонь",      "colors":["#F12711","#F5AF19"], "dir":"v"},
-    {"id":"sakura",    "name":"🌸 Сакура",     "colors":["#EC008C","#FC6767"], "dir":"d"},
-    {"id":"galaxy",    "name":"🌌 Галактика",  "colors":["#3F5EFB","#FC466B"], "dir":"dr"},
-    {"id":"forest",    "name":"🌿 Лес",        "colors":["#11998E","#38EF7D"], "dir":"v"},
-    {"id":"neon",      "name":"⚡ Неон",       "colors":["#8A2387","#E94057","#F27121"], "dir":"h"},
-    {"id":"gold",      "name":"👑 Золото",     "colors":["#BF953F","#FCF6BA","#B38728","#FBF5B7"], "dir":"d"},
-    {"id":"candy",     "name":"🍭 Конфета",    "colors":["#EE9CA7","#FFDDE1"], "dir":"dr"},
-    {"id":"cyberpunk", "name":"🔮 Киберпанк",  "colors":["#00F2FE","#4FACFE","#F35588"], "dir":"d"},
-    {"id":"magma",     "name":"🌋 Магма",      "colors":["#000000","#7E0000","#FF3B00","#FFE600"], "dir":"v"},
-]
-
 TEMPLATE_SETS = [
     {"title": "🖤 Чёрные", "short_name": "mainemoji_jellycolor53_by_justidev"},
     {"title": "🖤 Чёрные 2", "short_name": "mainemoji_jellycolor5_by_justidev"},
@@ -211,316 +196,6 @@ def tint_image(img: Image.Image, hex_color: str) -> Image.Image:
     gn = val.point(lut_g)
     bn = val.point(lut_b)
     return Image.merge("RGBA", (rn, gn, bn, ao))
-
-
-def create_gradient_image(width: int, height: int, colors_hex: list, direction: str) -> Image.Image:
-    n = len(colors_hex)
-    rgbs = [hex_to_rgb(c) for c in colors_hex]
-
-    if direction == "h":
-        tw, th = 64, 1
-        pixels = []
-        for x in range(tw):
-            t = x / (tw - 1)
-            t = max(0.0, min(1.0, t))
-            scaled = t * (n - 1)
-            idx = min(int(scaled), n - 2)
-            f = scaled - idx
-            r1, g1, b1 = rgbs[idx]
-            r2, g2, b2 = rgbs[idx + 1]
-            r = int(r1 + (r2 - r1) * f)
-            g = int(g1 + (g2 - g1) * f)
-            b = int(b1 + (b2 - b1) * f)
-            pixels.append((r, g, b))
-        img = Image.new("RGB", (tw, th))
-        img.putdata(pixels)
-        return img.resize((width, height), Image.BILINEAR)
-
-    elif direction == "v":
-        tw, th = 1, 64
-        pixels = []
-        for y in range(th):
-            t = y / (th - 1)
-            t = max(0.0, min(1.0, t))
-            scaled = t * (n - 1)
-            idx = min(int(scaled), n - 2)
-            f = scaled - idx
-            r1, g1, b1 = rgbs[idx]
-            r2, g2, b2 = rgbs[idx + 1]
-            r = int(r1 + (r2 - r1) * f)
-            g = int(g1 + (g2 - g1) * f)
-            b = int(b1 + (b2 - b1) * f)
-            pixels.append((r, g, b))
-        img = Image.new("RGB", (tw, th))
-        img.putdata(pixels)
-        return img.resize((width, height), Image.BILINEAR)
-
-    else:
-        tw, th = 64, 64
-        pixels = []
-        for y in range(th):
-            for x in range(tw):
-                if direction in ("d", "dl"):
-                    t = (x + y) / (tw + th - 2)
-                elif direction == "dr":
-                    t = ((tw - 1 - x) + y) / (tw + th - 2)
-                else:
-                    t = (x + y) / (tw + th - 2)
-                
-                t = max(0.0, min(1.0, t))
-                scaled = t * (n - 1)
-                idx = min(int(scaled), n - 2)
-                f = scaled - idx
-                r1, g1, b1 = rgbs[idx]
-                r2, g2, b2 = rgbs[idx + 1]
-                r = int(r1 + (r2 - r1) * f)
-                g = int(g1 + (g2 - g1) * f)
-                b = int(b1 + (b2 - b1) * f)
-                pixels.append((r, g, b))
-        img = Image.new("RGB", (tw, th))
-        img.putdata(pixels)
-        return img.resize((width, height), Image.BILINEAR)
-
-
-def tint_image_gradient(img: Image.Image, colors_hex: list, direction: str) -> Image.Image:
-    img = img.convert("RGBA")
-    w, h = img.size
-    r, g, b, ao = img.split()
-    max_rg = ImageChops.lighter(r, g)
-    val = ImageChops.lighter(max_rg, b)
-    grad_img = create_gradient_image(w, h, colors_hex, direction)
-    val_rgb = Image.merge("RGB", (val, val, val))
-    tinted_rgb = ImageChops.multiply(grad_img, val_rgb)
-    tr, tg, tb = tinted_rgb.split()
-    return Image.merge("RGBA", (tr, tg, tb, ao))
-
-
-# ─── Lottie gradient ──────────────────────────────────────────────────────────
-
-def _sample_gradient(t: float, colors_hex: list) -> Tuple[float, float, float]:
-    """Сэмплирует цвет градиента в позиции t ∈ [0, 1].
-    t=0 → первый цвет (обычно тёмный), t=1 → последний (светлый).
-    """
-    n = len(colors_hex)
-    if n == 1:
-        r, g, b = hex_to_rgb(colors_hex[0])
-        return r / 255, g / 255, b / 255
-    t = max(0.0, min(1.0, t))
-    scaled = t * (n - 1)
-    i = min(int(scaled), n - 2)
-    f = scaled - i
-    r1, g1, b1 = hex_to_rgb(colors_hex[i])
-    r2, g2, b2 = hex_to_rgb(colors_hex[i + 1])
-    return (
-        (r1 + (r2 - r1) * f) / 255,
-        (g1 + (g2 - g1) * f) / 255,
-        (b1 + (b2 - b1) * f) / 255,
-    )
-
-
-def _collect_lottie_brightnesses(lottie_json: dict) -> Tuple[float, float]:
-    """Проходит весь Lottie JSON и собирает глобальный диапазон яркости всех цветов.
-    Возвращает (b_min, b_max) для нормализации.
-    """
-    bs: List[float] = []
-
-    def _rgb_brightness(rgb: list) -> Optional[float]:
-        if len(rgb) >= 3 and isinstance(rgb[0], (int, float)):
-            return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
-        return None
-
-    def _walk(obj):
-        if isinstance(obj, dict):
-            ty = obj.get("ty", "")
-            if ty in ("fl", "st"):
-                c = obj.get("c", {})
-                if isinstance(c, dict):
-                    k = c.get("k")
-                    a = c.get("a", 0)
-                    if a == 0 and isinstance(k, list):
-                        bv = _rgb_brightness(k)
-                        if bv is not None:
-                            bs.append(bv)
-                    elif a == 1 and isinstance(k, list):
-                        for kf in k:
-                            if isinstance(kf, dict):
-                                s = kf.get("s")
-                                bv = _rgb_brightness(s) if isinstance(s, list) else None
-                                if bv is not None:
-                                    bs.append(bv)
-            elif ty in ("gf", "gs"):
-                g = obj.get("g", {})
-                if isinstance(g, dict):
-                    p = int(g.get("p", 0))
-                    kp = g.get("k", {})
-                    if isinstance(kp, dict):
-                        raw = kp.get("k")
-                        if isinstance(raw, list) and raw and isinstance(raw[0], (int, float)):
-                            i = 0
-                            while i + 3 < p * 4 and i + 3 < len(raw):
-                                bv = _rgb_brightness(raw[i + 1: i + 4])
-                                if bv is not None:
-                                    bs.append(bv)
-                                i += 4
-                        elif isinstance(raw, list):
-                            for kf in raw:
-                                if isinstance(kf, dict):
-                                    s = kf.get("s")
-                                    if isinstance(s, list) and s and isinstance(s[0], (int, float)):
-                                        i = 0
-                                        while i + 3 < p * 4 and i + 3 < len(s):
-                                            bv = _rgb_brightness(s[i + 1: i + 4])
-                                            if bv is not None:
-                                                bs.append(bv)
-                                            i += 4
-            for v in obj.values():
-                _walk(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                _walk(item)
-
-    _walk(lottie_json)
-    if not bs:
-        return 0.0, 1.0
-    return min(bs), max(bs)
-
-
-def apply_gradient_lottie(lottie_json: dict, gradient: dict) -> dict:
-    """Умная перекраска TGS с градиентом.
-
-    v3.1 — полностью переработан:
-    Старый алгоритм (v3) заменял ВСЕ fl/st/gf/gs одним градиентным fill —
-    это уничтожало внутреннюю структуру эмодзи (тени, блики, детали).
-
-    Новый алгоритм — brightness remapping:
-    1. Собирает все цвета по всему Lottie и находит глобальный диапазон яркости
-    2. Для каждого цвета вычисляет его нормализованную яркость t ∈ [0, 1]
-    3. Заменяет цвет на gradient.sample(t) — сэмпл градиента в этой позиции
-    4. Тёмные детали → тёмный конец градиента; светлые → светлый конец
-    5. Все внутренние соотношения яркостей (тени, блики) сохраняются
-    6. Для gradient fills (gf/gs) — каждый стоп ремапируется отдельно
-    7. Для анимированных keyframes — каждый кадр ремапируется (поддержка s-only формата)
-    """
-    colors_hex = gradient["colors"]
-    b_min, b_max = _collect_lottie_brightnesses(lottie_json)
-    b_range = b_max - b_min if b_max > b_min else 1.0
-
-    def _t(rgb: list) -> float:
-        """Нормализованная яркость цвета → позиция в градиенте [0, 1]."""
-        if len(rgb) < 3 or not isinstance(rgb[0], (int, float)):
-            return 0.5
-        bv = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
-        return (bv - b_min) / b_range
-
-    def _remap(rgb: list) -> list:
-        """Ремапирует [r,g,b,?] в цвет градиента по яркости. Alpha сохраняется."""
-        nr, ng, nb = _sample_gradient(_t(rgb), colors_hex)
-        alpha = rgb[3] if len(rgb) > 3 else 1.0
-        return [nr, ng, nb, alpha]
-
-    def _remap_grad_stops(raw: list, p: int) -> list:
-        """Ремапирует цветовые стопы gradient fill/stroke по яркости.
-        Alpha-стопы (после p*4) не трогаются.
-        """
-        color_len = p * 4
-        if len(raw) < color_len:
-            color_len = (len(raw) // 4) * 4
-        new_raw = list(raw)
-        i = 0
-        while i + 3 < color_len:
-            nr, ng, nb = _sample_gradient(_t(new_raw[i + 1: i + 4]), colors_hex)
-            new_raw[i + 1] = nr
-            new_raw[i + 2] = ng
-            new_raw[i + 3] = nb
-            i += 4
-        return new_raw
-
-    def _recolor_prop(prop: dict) -> None:
-        """Ремапирует color-property {a, k} fl/st шейпа."""
-        if not isinstance(prop, dict):
-            return
-        k = prop.get("k")
-        if k is None:
-            return
-        if isinstance(k, list):
-            if len(k) >= 3 and isinstance(k[0], (int, float)):
-                prop["k"] = _remap(k)
-            else:
-                for kf in k:
-                    if not isinstance(kf, dict):
-                        continue
-                    vs = kf.get("s")
-                    if isinstance(vs, list) and len(vs) >= 3 and isinstance(vs[0], (int, float)):
-                        kf["s"] = _remap(vs)
-                    ve = kf.get("e")
-                    if isinstance(ve, list) and len(ve) >= 3 and isinstance(ve[0], (int, float)):
-                        kf["e"] = _remap(ve)
-
-    def _recolor_grad_obj(g_obj: dict) -> None:
-        """Ремапирует gradient-объект {p, k} gf/gs шейпа."""
-        if not isinstance(g_obj, dict):
-            return
-        p = int(g_obj.get("p", 0))
-        if p == 0:
-            return
-        k_prop = g_obj.get("k")
-        if not isinstance(k_prop, dict):
-            return
-        raw = k_prop.get("k")
-        if raw is None:
-            return
-        if isinstance(raw, list) and raw and isinstance(raw[0], (int, float)):
-            k_prop["k"] = _remap_grad_stops(raw, p)
-        elif isinstance(raw, list):
-            for kf in raw:
-                if not isinstance(kf, dict):
-                    continue
-                for field in ("s", "e"):
-                    val = kf.get(field)
-                    if isinstance(val, list) and val and isinstance(val[0], (int, float)):
-                        kf[field] = _remap_grad_stops(val, p)
-
-    def _walk(obj):
-        if isinstance(obj, dict):
-            ty = obj.get("ty", "")
-            if ty in ("fl", "st"):
-                _recolor_prop(obj.get("c", {}))
-                return
-            if ty in ("gf", "gs"):
-                _recolor_grad_obj(obj.get("g"))
-                return
-            # Solid color layer
-            sc = obj.get("sc")
-            if isinstance(sc, str) and sc.startswith("#"):
-                try:
-                    sr, sg, sb = hex_to_rgb(sc)
-                    nr, ng, nb = _sample_gradient(_t([sr / 255, sg / 255, sb / 255]), colors_hex)
-                    obj["sc"] = rgb_to_hex(int(nr * 255), int(ng * 255), int(nb * 255))
-                except Exception:
-                    pass
-            # Text layer
-            t_obj = obj.get("t")
-            if isinstance(t_obj, dict):
-                d_obj = t_obj.get("d")
-                if isinstance(d_obj, dict):
-                    for kf in d_obj.get("k", []):
-                        if isinstance(kf, dict):
-                            s_obj = kf.get("s", {})
-                            if isinstance(s_obj, dict):
-                                for field in ("fc", "sc"):
-                                    col = s_obj.get(field)
-                                    if isinstance(col, list) and len(col) >= 3:
-                                        nr, ng, nb = _sample_gradient(_t(col), colors_hex)
-                                        alpha = col[3] if len(col) > 3 else 1.0
-                                        s_obj[field] = [nr, ng, nb, alpha]
-            for v in obj.values():
-                _walk(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                _walk(item)
-
-    _walk(lottie_json)
-    return lottie_json
 
 
 # ─── Lottie tinting ───────────────────────────────────────────────────────────
@@ -1362,16 +1037,6 @@ OLD_USERNAME = "@emojicreationbot"
 NEW_USERNAME = "JellyColor"
 
 
-def _dominant_color_from_gradient(colors: list) -> str:
-    if not colors:
-        return "#000000"
-    rs, gs, bs = [], [], []
-    for c in colors:
-        r, g, b = hex_to_rgb(c)
-        rs.append(r); gs.append(g); bs.append(b)
-    return rgb_to_hex(sum(rs)//len(rs), sum(gs)//len(gs), sum(bs)//len(bs))
-
-
 def _apply_neon_style_to_items(items: list, stroke_hex: str) -> list:
     sr, sg, sb = hex_to_rgb(stroke_hex)
     snr, sng, snb = sr / 255, sg / 255, sb / 255
@@ -1636,34 +1301,13 @@ async def recolor_document(client, doc, hex_color: str, is_emoji: bool = False) 
     return await loop.run_in_executor(None, _recolor_document_sync, data, mime, hex_color, is_emoji)
 
 
-def _recolor_document_gradient_sync(data: bytes, mime: str, gradient: dict, is_emoji: bool) -> io.BytesIO:
-    if mime=="application/x-tgsticker":
-        lottie=json_loads(gzip.decompress(data))
-        apply_gradient_lottie(lottie,gradient)
-        buf=io.BytesIO(compress_tgs(lottie)); buf.name="sticker.tgs"
-    else:
-        sz=100 if is_emoji else 512
-        img=Image.open(io.BytesIO(data)).convert("RGBA")
-        if img.size != (sz, sz):
-            img = img.resize((sz,sz),Image.LANCZOS)
-        buf=io.BytesIO()
-        tint_image_gradient(img, gradient["colors"], gradient.get("dir", "d")).save(buf,format="WEBP",lossless=True)
-        buf.seek(0); buf.name="sticker.webp"
-    buf.seek(0)
-    return buf
-
-
-async def recolor_document_gradient(client, doc, gradient: dict, is_emoji: bool = False) -> io.BytesIO:
-    """Перекрашивает стикер с градиентом."""
-    data=await download_cached(client,doc)
-    mime=getattr(doc,"mime_type","")
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _recolor_document_gradient_sync, data, mime, gradient, is_emoji)
-
-
-
 def validate_short_name(name: str) -> bool:
     return bool(re.fullmatch(r"[a-z0-9_]{1,64}",name))
+
+
+def _auto_short_name(prefix: str) -> str:
+    """Генерирует валидный уникальный short_name (без суффикса _by_username)."""
+    return prefix + uuid.uuid4().hex[:8]
 
 
 async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, is_emoji: bool):
@@ -1763,7 +1407,7 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
 @loader.tds
 class JellyColorMod(loader.Module):
     """🎨 JellyColor: Перекраска стикеров и создание текстовых эмодзи-паков.
-    Поддерживает градиенты, пользовательские шрифты, изменение масштаба и отмену генерации."""
+    История цветов, авто-название пака, пользовательские шрифты, изменение масштаба и отмену генерации."""
 
     strings = {"name": "JellyColor"}
 
@@ -1784,10 +1428,12 @@ class JellyColorMod(loader.Module):
                 store.pop(k,None)
 
     def _color_history(self) -> List[str]:
+        """Недавние цвета для быстрого повтора — только валидные HEX
+        (старые записи вроде 'text'/'без перекраски'/'grad:...' отбрасываются)."""
         seen=[]; out=[]
         for e in reversed(self.db.get("JellyColor","stats",[])):
             c=e.get("color","")
-            if c and c!="text" and c not in seen:
+            if re.fullmatch(r"#[0-9a-fA-F]{6}", c or "") and c not in seen:
                 seen.append(c); out.append(c)
             if len(out)>=5: break
         return out
@@ -1912,7 +1558,7 @@ class JellyColorMod(loader.Module):
         results.sort(key=lambda x:x[0])
         return [x for _,x in results]
 
-    # ─── Shared color/gradient UI helpers ────────────────────────────────────
+    # ─── Shared color UI helpers ──────────────────────────────────────────────
 
     @staticmethod
     def _patch_allow(rows, uid):
@@ -1924,32 +1570,17 @@ class JellyColorMod(loader.Module):
                     btn["always_allow"] = [uid]
         return rows
 
-    def _gradient_menu_text(self) -> str:
-        user_gradients = self.db.get("JellyColor", "user_gradients", [])
-        all_grads = GRADIENT_PRESETS + user_gradients
-        lines = [pe("🎨", PE["stats"]) + " <b>Выберите градиент</b>\n"]
-        for g in all_grads:
-            lines.append(f"{g['name']}  <code>{'  '.join(g['colors'])}</code>")
-        return "\n".join(lines)
-
-    def _gradient_menu_markup(self, grad_cb, uid, back_cb):
-        user_gradients = self.db.get("JellyColor", "user_gradients", [])
-        all_grads = GRADIENT_PRESETS + user_gradients
-        rows = []; row = []
-        for g in all_grads:
-            row.append({"text": g["name"], "icon_custom_emoji_id": PE["stats"],
-                        "callback": grad_cb, "args": (uid, g["id"])})
-            if len(row) == 2:
-                rows.append(row); row = []
-        if row:
-            rows.append(row)
-        rows.append([{"text": "◁ Назад", "icon_custom_emoji_id": PE["palette"],
-                      "callback": back_cb, "args": (uid,)}])
-        return rows
-
-    def _color_rows_with_gradient(self, uid, col_cb, hex_cb, grad_open_cb, no_color_cb=None, custom_grad_cb=None):
-        """Генерирует строки кнопок выбора цвета: пресеты 2-в-ряд + HEX + градиент + без перекраски + свой градиент."""
-        rows = []; row = []
+    def _color_rows(self, uid, col_cb, hex_cb, no_color_cb=None):
+        """Строки кнопок выбора цвета: быстрый выбор из истории + пресеты 2-в-ряд
+        + свой HEX + без перекраски. Стили проставляются в вызывающем markup."""
+        rows = []
+        # Быстрый повтор недавних цветов
+        hist = self._color_history()
+        if hist:
+            hrow = [{"text": c, "callback": col_cb, "args": (uid, c)} for c in hist[:4]]
+            rows.append(hrow)
+        # Пресеты 2-в-ряд
+        row = []
         for label, hv in PRESET_COLORS.items():
             row.append({"text": label, "callback": col_cb, "args": (uid, hv)})
             if len(row) == 2:
@@ -1958,13 +1589,6 @@ class JellyColorMod(loader.Module):
             rows.append(row)
         rows.append([{"text": "✏️ Свой HEX", "icon_custom_emoji_id": PE["palette"],
                       "input": "Введите HEX, например #FF3B30", "handler": hex_cb, "args": (uid,)}])
-        grad_row = [{"text": "🎨 Градиент", "icon_custom_emoji_id": PE["stats"],
-                     "callback": grad_open_cb, "args": (uid,)}]
-        if custom_grad_cb:
-            grad_row.append({"text": "✏️ Свой градиент", "icon_custom_emoji_id": PE["palette"],
-                             "input": "Введите HEX через запятую, например #FF0000,#00FF00,#0000FF",
-                             "handler": custom_grad_cb, "args": (uid,)})
-        rows.append(grad_row)
         if no_color_cb:
             rows.append([{"text": "◻️ Без перекраски", "icon_custom_emoji_id": PE["eye"],
                           "callback": no_color_cb, "args": (uid,)}])
@@ -1987,7 +1611,7 @@ class JellyColorMod(loader.Module):
         uid=message.sender_id; pc=len(full_set.documents)
         self._sessions[uid]={"ts":time.time(),"type":tt,"doc":td,"set_id":ts,
             "set_short":getattr(full_set.set,"short_name",""),"full_set":full_set,"pack_count":pc,
-            "scope":None,"color":None,"gradient":None,"pack_name":None,
+            "scope":None,"color":None,"pack_name":None,
             "step":"scope" if pc>1 else "color"}
         await message.delete()
         await self.inline.form(text=self._j_text(uid),reply_markup=self._j_markup(uid),message=message,always_allow=[uid])
@@ -1996,17 +1620,14 @@ class JellyColorMod(loader.Module):
         s=self._sessions[uid]; step=s["step"]
         if step=="scope": return pe("🖤",PE["brush"])+f" <b>Что перекрасить?</b>\n\nПак <code>{s['set_short']}</code> — <b>{s['pack_count']}</b> шт."
         if step=="color":
-            hist=self._color_history()
-            hs=("\n"+pe("⏰",PE["clock"])+" Последние: "+"  ".join(f"<code>{c}</code>" for c in hist)) if hist else ""
-            sc="один" if s["scope"]=="one" else f"весь пак ({s['pack_count']})"
-            return pe("🖋",PE["palette"])+f" <b>Цвет</b> — {sc}{hs}"
-        if step=="gradient_menu": return self._gradient_menu_text()
+            sc="один стикер" if s["scope"]=="one" else f"весь пак ({s['pack_count']} шт.)"
+            hint = pe("⏰",PE["clock"])+" Сверху — недавние цвета для быстрого повтора." if self._color_history() else ""
+            return pe("🖋",PE["palette"])+f" <b>Выберите цвет</b>\n\nЧто красим: <b>{sc}</b>\n{hint}"
         if step=="title":
-            g=s.get("gradient")
-            label=g["name"] if g else f"<code>{s['color'] or 'без перекраски'}</code>"
-            return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nЦвет: {label}\n\n<i>Введите отображаемое название (любые символы)</i>"
+            label=f"<code>{s['color'] or 'без перекраски'}</code>"
+            return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nЦвет: {label}\n\n<i>Введите название или нажмите «Авто» — короткое имя подберётся само.</i>"
         if step=="name":
-            return pe("🏷",PE["sticker"])+f" <b>short_name пака</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите short_name — только a-z, 0-9, _</i>"
+            return pe("🏷",PE["sticker"])+f" <b>Короткое имя (short_name)</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите короткое имя (a-z, 0-9, _) или нажмите «Сгенерировать».</i>"
         if step=="exists_choice":
             return pe("⚠️",PE["info"])+f" <b>Пак уже существует!</b>\n\nПак <code>{s['pack_name']}</code> уже создан на вашем аккаунте. Выберите действие:"
         if step=="processing":
@@ -2023,33 +1644,24 @@ class JellyColorMod(loader.Module):
             {"text":"Один","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"],"style":"primary","callback":self._j_s1,"args":(uid,)},
             {"text":"Весь пак","icon_custom_emoji_id":PE["pack"],"emoji_id":PE["pack"],"style":"success","callback":self._j_sa,"args":(uid,)},
         ]]
-        if step in ("color","gradient_menu"):
-            if step=="gradient_menu":
-                rows = self._gradient_menu_markup(self._j_grad,uid,self._j_back_col)
-                for r in rows:
-                    for btn in r:
-                        btn["emoji_id"] = btn.get("icon_custom_emoji_id")
-                        btn["style"] = "primary"
-                return rows
-            rows = self._color_rows_with_gradient(uid,self._j_col,self._j_hex,self._j_open_grad,
-                                                  no_color_cb=self._j_no_color,
-                                                  custom_grad_cb=self._j_custom_grad)
+        if step=="color":
+            rows = self._color_rows(uid,self._j_col,self._j_hex,no_color_cb=self._j_no_color)
             for r in rows:
                 for btn in r:
                     btn["emoji_id"] = btn.get("icon_custom_emoji_id")
-                    if "HEX" in btn["text"] or "Градиент" in btn["text"]:
-                        btn["style"] = "primary"
-                    elif "Без перекраски" in btn["text"]:
+                    if "HEX" in btn["text"] or "Без перекраски" in btn["text"]:
                         btn["style"] = "primary"
             if pc > 1:
                 rows.append([{"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._j_back,"args":(uid,)}])
             return rows
         if step=="title": return [
-            [{"text":"Ввести название","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"],"style":"primary","input":"Например: My Cool Pack","handler":self._j_title,"args":(uid,)}],
+            [{"text":"✏️ Ввести название","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"],"style":"primary","input":"Например: My Cool Pack","handler":self._j_title,"args":(uid,)}],
+            [{"text":"🎲 Авто (без названия)","icon_custom_emoji_id":PE["ok"],"emoji_id":PE["ok"],"style":"success","callback":self._j_auto,"args":(uid,)}],
             [{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._j_back,"args":(uid,)}]
         ]
         if step=="name": return [
-            [{"text":"Ввести short_name","icon_custom_emoji_id":PE["palette"],"emoji_id":PE["palette"],"style":"primary","input":"a-z, 0-9, _ (без _by_username)","handler":self._j_name,"args":(uid,)}],
+            [{"text":"✏️ Ввести short_name","icon_custom_emoji_id":PE["palette"],"emoji_id":PE["palette"],"style":"primary","input":"a-z, 0-9, _ (без _by_username)","handler":self._j_name,"args":(uid,)}],
+            [{"text":"🎲 Сгенерировать","icon_custom_emoji_id":PE["ok"],"emoji_id":PE["ok"],"style":"success","callback":self._j_auto,"args":(uid,)}],
             [{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._j_back,"args":(uid,)}]
         ]
         if step=="exists_choice":
@@ -2081,8 +1693,6 @@ class JellyColorMod(loader.Module):
             else:
                 await call.answer("Назад вернуться нельзя (первый шаг).", show_alert=True)
                 return
-        elif step == "gradient_menu":
-            s["step"] = "color"
         elif step == "title":
             s["step"] = "color"
         elif step == "name":
@@ -2116,7 +1726,7 @@ class JellyColorMod(loader.Module):
     async def _j_col(self,call,uid,hex_color):
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["color"]=hex_color; s["gradient"]=None; s["step"]="title"
+        s["color"]=hex_color; s["step"]="title"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_hex(self,call,value,uid):
@@ -2125,49 +1735,26 @@ class JellyColorMod(loader.Module):
         c=value.strip()
         if not c.startswith("#"): c="#"+c
         if not re.fullmatch(r"#[0-9a-fA-F]{6}",c): await call.answer("Неверный HEX.",show_alert=True); return
-        s["color"]=c.upper(); s["gradient"]=None; s["step"]="title"
-        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
-
-    async def _j_open_grad(self,call,uid):
-        s=self._sessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["step"]="gradient_menu"
-        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
-
-    async def _j_grad(self,call,uid,grad_id):
-        s=self._sessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        user_gradients = self.db.get("JellyColor", "user_gradients", [])
-        g=next((x for x in GRADIENT_PRESETS + user_gradients if x["id"]==grad_id),None)
-        if not g: return
-        s["gradient"]=g; s["color"]="grad:"+g["name"]; s["step"]="title"
-        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
-
-    async def _j_back_col(self,call,uid):
-        s=self._sessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["step"]="color"
+        s["color"]=c.upper(); s["step"]="title"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_no_color(self,call,uid):
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["color"]=None; s["gradient"]=None; s["step"]="title"
+        s["color"]=None; s["step"]="title"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
-    async def _j_custom_grad(self,call,value,uid):
+    async def _j_auto(self,call,uid):
+        """Авто-название: подбирает короткое имя сам и сразу запускает генерацию."""
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        parts=[p.strip() for p in value.split(",")]
-        colors=[]
-        for p in parts:
-            c=p if p.startswith("#") else "#"+p
-            if re.fullmatch(r"#[0-9a-fA-F]{6}",c): colors.append(c.upper())
-        if len(colors)<2:
-            await call.answer("Нужно минимум 2 HEX через запятую, например #FF0000,#0000FF",show_alert=True); return
-        g={"id":"custom","name":"✏️ Свой","colors":colors,"dir":"d"}
-        s["gradient"]=g; s["color"]="grad:✏️ Свой"; s["step"]="title"
+        if not s.get("pack_title"):
+            s["pack_title"]="JellyColor "+(s["color"] or "")
+        me=await self._client.get_me()
+        s["pack_name"]=_auto_short_name("jc")+"_by_"+_get_bot_suffix(me)
+        s["step"]="processing"; s["exists_mode"]="recreate"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
+        s["run_task"]=asyncio.ensure_future(self._j_run(call,uid))
 
     async def _j_title(self,call,value,uid):
         s=self._sessions.get(uid)
@@ -2223,16 +1810,13 @@ class JellyColorMod(loader.Module):
         if not s: return
         try:
             color=s["color"]; pname=s["pack_name"]; ptype=s["type"]
-            gradient=s.get("gradient")  # None если обычный цвет
             docs=[s["doc"]] if (s["scope"]=="one" or s["pack_count"]==1) else list(s["full_set"].documents)
             me=await self._client.get_me(); mee=await self._client.get_input_entity("me")
             async def _fn(i,doc):
                 _is_emoji=(ptype=="emoji")
                 orig_mime=getattr(doc,"mime_type","image/webp")
                 mime="application/x-tgsticker" if orig_mime=="application/x-tgsticker" else "image/webp"
-                if gradient:
-                    buf=await recolor_document_gradient(self._client,doc,gradient,is_emoji=_is_emoji)
-                elif color:
+                if color:
                     buf=await recolor_document(self._client,doc,color,is_emoji=_is_emoji)
                 else:
                     # Без перекраски — только ресайз для статичных
@@ -2267,17 +1851,16 @@ class JellyColorMod(loader.Module):
                 return await _upload_item(self._client,mee,up,mime,es,ptype=="emoji")
             ordered=await self._parallel(docs,_fn,"Перекраска",call,reply_markup=self._j_markup(uid))
             if not ordered: raise ValueError("Нет стикеров")
-            clabel=gradient["name"] if gradient else (color or "без перекраски")
+            clabel=color or "без перекраски"
             title=s.get("pack_title") or "JellyColor "+clabel
             fn,err=await _safe_create_set(self._client,me.id,title,pname,ordered,ptype=="emoji",exists_mode=s.get("exists_mode","recreate"))
             if err: raise ValueError(err)
-            
+
             links = ["https://t.me/" + ("addemoji/" if ptype=="emoji" else "addstickers/") + name for name in fn]
             main_link = links[0]
             links_text = "\n".join([f"• <a href=\"{l}\">{l}</a>" for l in links])
-            
+
             stats=self.db.get("JellyColor","stats",[])
-            clabel=gradient["name"] if gradient else (color or "без перекраски")
             for name, link in zip(fn, links):
                 stats.append({"name":name,"link":link,"color":clabel,"count":len(ordered),"type":ptype,"ts":int(time.time())})
             self.db.set("JellyColor","stats",stats)
@@ -2434,31 +2017,22 @@ class JellyColorMod(loader.Module):
                 [{"text": "🛑 Остановить генерацию", "icon_custom_emoji_id": PE["err"],"emoji_id":PE["err"], "style": "danger", "callback": self._jt_cancel_generation, "args": (uid, "preview")}]
             ]
         if step=="color":
-            rows=self._color_rows_with_gradient(uid,self._jt_col,self._jt_hex,self._jt_open_grad,
-                                                 no_color_cb=self._jt_no_color,
-                                                 custom_grad_cb=self._jt_custom_grad)
+            rows=self._color_rows(uid,self._jt_col,self._jt_hex,no_color_cb=self._jt_no_color)
             for r in rows:
                 for btn in r:
                     btn["emoji_id"] = btn.get("icon_custom_emoji_id")
-                    if "HEX" in btn["text"] or "Градиент" in btn["text"]:
-                        btn["style"] = "primary"
-                    elif "Без перекраски" in btn["text"]:
+                    if "HEX" in btn["text"] or "Без перекраски" in btn["text"]:
                         btn["style"] = "primary"
             rows.append([{"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"], "style": "danger", "callback": self._jt_back, "args": (uid,)}])
             return rows
-        if step=="gradient_menu":
-            rows = self._gradient_menu_markup(self._jt_grad,uid,self._jt_back_col)
-            for r in rows:
-                for btn in r:
-                    btn["emoji_id"] = btn.get("icon_custom_emoji_id")
-                    btn["style"] = "primary"
-            return rows
         if step=="title": return [
-            [{"text":"Ввести название","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"], "style": "primary", "input":"Например: My Cool Pack","handler":self._jt_title,"args":(uid,)}],
+            [{"text":"✏️ Ввести название","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"], "style": "primary", "input":"Например: My Cool Pack","handler":self._jt_title,"args":(uid,)}],
+            [{"text":"🎲 Авто (по тексту)","icon_custom_emoji_id":PE["ok"],"emoji_id":PE["ok"], "style": "success", "callback":self._jt_auto,"args":(uid,)}],
             [{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"], "style": "danger", "callback":self._jt_back,"args":(uid,)}]
         ]
         if step=="name": return [
-            [{"text":"Ввести short_name","icon_custom_emoji_id":PE["palette"],"emoji_id":PE["palette"], "style": "primary", "input":"a-z, 0-9, _ (без _by_username)","handler":self._jt_name,"args":(uid,)}],
+            [{"text":"✏️ Ввести short_name","icon_custom_emoji_id":PE["palette"],"emoji_id":PE["palette"], "style": "primary", "input":"a-z, 0-9, _ (без _by_username)","handler":self._jt_name,"args":(uid,)}],
+            [{"text":"🎲 Сгенерировать","icon_custom_emoji_id":PE["ok"],"emoji_id":PE["ok"], "style": "success", "callback":self._jt_auto,"args":(uid,)}],
             [{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"], "style": "danger", "callback":self._jt_back,"args":(uid,)}]
         ]
         if step=="exists_choice":
@@ -2491,8 +2065,6 @@ class JellyColorMod(loader.Module):
             s["step"] = "font"
         elif step == "color":
             s["step"] = "preview"
-        elif step == "gradient_menu":
-            s["step"] = "color"
         elif step == "title":
             s["step"] = "color"
         elif step == "name":
@@ -2693,7 +2265,7 @@ class JellyColorMod(loader.Module):
     async def _jt_col(self,call,uid,hc):
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["color"]=hc; s["gradient"]=None; s["step"]="title"
+        s["color"]=hc; s["step"]="title"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
     async def _jt_hex(self,call,value,uid):
@@ -2702,50 +2274,26 @@ class JellyColorMod(loader.Module):
         c=value.strip()
         if not c.startswith("#"): c="#"+c
         if not re.fullmatch(r"#[0-9a-fA-F]{6}",c): await call.answer("Неверный HEX.",show_alert=True); return
-        s["color"]=c.upper(); s["gradient"]=None; s["step"]="title"
-        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
-
-    async def _jt_open_grad(self,call,uid):
-        s=self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["step"]="gradient_menu"
-        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
-
-    async def _jt_grad(self,call,uid,grad_id):
-        s=self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        user_gradients = self.db.get("JellyColor", "user_gradients", [])
-        g=next((x for x in GRADIENT_PRESETS + user_gradients if x["id"]==grad_id),None)
-        if not g: return
-        s["gradient"]=g; s["color"]="grad:"+g["name"]; s["step"]="title"
-        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
-
-    async def _jt_back_col(self,call,uid):
-        s=self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["step"]="color"
+        s["color"]=c.upper(); s["step"]="title"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
     async def _jt_no_color(self,call,uid):
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["color"]=None; s["gradient"]=None; s["step"]="title"
+        s["color"]=None; s["step"]="title"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
-    async def _jt_custom_grad(self,call,value,uid):
+    async def _jt_auto(self,call,uid):
+        """Авто-название: имя пака по тексту, short_name генерируется, сразу запуск."""
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        parts=[p.strip() for p in value.split(",")]
-        colors=[]
-        for p in parts:
-            c=p if p.startswith("#") else "#"+p
-            if re.fullmatch(r"#[0-9a-fA-F]{6}",c): colors.append(c.upper())
-        if len(colors)<2:
-            await call.answer("Нужно минимум 2 HEX через запятую, например #FF0000,#0000FF",show_alert=True); return
-        g={"id":"custom","name":"✏️ Свой","colors":colors,"dir":"d"}
-        s["gradient"]=g; s["color"]="grad:✏️ Свой"; s["step"]="title"
+        if not s.get("pack_title"):
+            s["pack_title"]=(s.get("text") or "Jelly")+" Emoji Pack"
+        me=await self._client.get_me()
+        s["pack_name"]=_auto_short_name("jt")+"_by_"+_get_bot_suffix(me)
+        s["step"]="processing"; s["exists_mode"]="recreate"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
-
+        s["run_task"]=asyncio.ensure_future(self._jt_run(call,uid))
 
     async def _jt_title(self,call,value,uid):
         s=self._tsessions.get(uid)
@@ -2800,7 +2348,6 @@ class JellyColorMod(loader.Module):
         if not s: return
         try:
             tmpl,txt,pname,color=s["template"],s["text"],s["pack_name"],s.get("color")
-            gradient=s.get("gradient")
             try:
                 fs=await self._client(functions.messages.GetStickerSetRequest(
                     stickerset=types.InputStickerSetShortName(short_name=tmpl["short_name"]),hash=0))
@@ -2817,26 +2364,16 @@ class JellyColorMod(loader.Module):
                     def _process_tgs():
                         lottie_obj = json_loads(gzip.decompress(raw))
                         modify_lottie(lottie_obj, txt, s.get("font_path"), scale_factor=s.get("scale_factor", 1.0))
-                        if gradient:
-                            apply_gradient_lottie(lottie_obj, gradient)
-                            outline_color = _dominant_color_from_gradient(gradient["colors"])
-                        elif color:
+                        if color:
                             tint_lottie(lottie_obj, color)
-                            outline_color = color
-                        else:
-                            outline_color = None
-                            
-                        if outline_color:
-                            _set_text_neon_style(lottie_obj, outline_color)
+                            _set_text_neon_style(lottie_obj, color)
                         return compress_tgs(lottie_obj)
                     patched = await loop.run_in_executor(None, _process_tgs)
                     buf=io.BytesIO(patched); buf.name="sticker.tgs"
                 else:
                     def _process_img():
                         img=Image.open(io.BytesIO(raw)).convert("RGBA").resize((100,100),Image.LANCZOS)
-                        if gradient:
-                            img=tint_image_gradient(img, gradient["colors"], gradient.get("dir", "d"))
-                        elif color and not color.startswith("grad:"):
+                        if color:
                             img=tint_image(img,color)
                         buf=io.BytesIO()
                         img.save(buf,format="WEBP",lossless=True)
@@ -2856,7 +2393,7 @@ class JellyColorMod(loader.Module):
             if not ordered:
                 await call.edit(text=pe("❌",PE["err"])+" Ни один эмодзи не обработан.", reply_markup=self._jt_markup(uid))
                 self._tsessions.pop(uid,None); return
-            color_label=gradient["name"] if gradient else (color or "без перекраски")
+            color_label=color or "без перекраски"
             pack_title=s.get("pack_title") or txt+" Emoji Pack"
             fn,err=await _safe_create_set(self._client,me.id,pack_title,pname,ordered,True,exists_mode=s.get("exists_mode","recreate"))
             if err: raise ValueError(err)
@@ -3034,85 +2571,6 @@ class JellyColorMod(loader.Module):
         await self._client.send_file(message.chat_id,buf,
             caption=pe("📤",PE["export"])+f" Экспорт — <b>{len(stats)}</b> записей",parse_mode="HTML")
         await message.delete()
-
-    @loader.command()
-    async def jaddgrad(self, message: Message):
-        """Добавить свой градиент: .jaddgrad <название> <HEX,HEX,...> [h/v/d/dr]"""
-        args = utils.get_args_raw(message).strip()
-        if not args:
-            await utils.answer(message, pe("ℹ️", PE["info"]) + " Использование: <code>.jaddgrad <название> <HEX,HEX,...> [направление]</code>\nПример: <code>.jaddgrad Мой #FF0000,#0000FF d</code>")
-            return
-            
-        parts = args.split(maxsplit=2)
-        if len(parts) < 2:
-            await utils.answer(message, pe("❌", PE["err"]) + " Укажите название и цвета (HEX через запятую)")
-            return
-            
-        name = parts[0]
-        colors_str = parts[1]
-        direction = parts[2].lower() if len(parts) > 2 else "d"
-        if direction not in ("h", "v", "d", "dr"):
-            direction = "d"
-            
-        color_parts = [c.strip() for c in colors_str.split(",")]
-        colors = []
-        for p in color_parts:
-            c = p if p.startswith("#") else "#" + p
-            if re.fullmatch(r"#[0-9a-fA-F]{6}", c):
-                colors.append(c.upper())
-                
-        if len(colors) < 2:
-            await utils.answer(message, pe("❌", PE["err"]) + " Нужно указать минимум 2 корректных HEX-цвета через запятую")
-            return
-            
-        user_gradients = self.db.get("JellyColor", "user_gradients", [])
-        if any(g["name"].lower().replace("✨ ", "") == name.lower() for g in user_gradients):
-            await utils.answer(message, pe("❌", PE["err"]) + f" Градиент с названием <b>{name}</b> уже существует.")
-            return
-            
-        g_id = "user_" + uuid.uuid4().hex[:8]
-        new_g = {
-            "id": g_id,
-            "name": "✨ " + name,
-            "colors": colors,
-            "dir": direction
-        }
-        user_gradients.append(new_g)
-        self.db.set("JellyColor", "user_gradients", user_gradients)
-        await utils.answer(message, pe("✅", PE["ok"]) + f" Градиент <b>{name}</b> успешно добавлен!")
-
-    @loader.command()
-    async def jdelgrad(self, message: Message):
-        """Удалить свой градиент: .jdelgrad <название>"""
-        name = utils.get_args_raw(message).strip()
-        if not name:
-            await utils.answer(message, pe("ℹ️", PE["info"]) + " Укажите название градиента для удаления: <code>.jdelgrad <название></code>")
-            return
-            
-        user_gradients = self.db.get("JellyColor", "user_gradients", [])
-        new_list = [g for g in user_gradients if g["name"].lower().replace("✨ ", "") != name.lower()]
-        if len(new_list) == len(user_gradients):
-            await utils.answer(message, pe("❌", PE["err"]) + f" Пользовательский градиент <b>{name}</b> не найден.")
-            return
-            
-        self.db.set("JellyColor", "user_gradients", new_list)
-        await utils.answer(message, pe("✅", PE["ok"]) + f" Градиент <b>{name}</b> удален.")
-
-    @loader.command()
-    async def jgrads(self, message: Message):
-        """Список доступных градиентов"""
-        user_gradients = self.db.get("JellyColor", "user_gradients", [])
-        lines = [pe("🎨", PE["stats"]) + " <b>Системные градиенты:</b>\n"]
-        for g in GRADIENT_PRESETS:
-            lines.append(f"• {g['name']} (<code>{g['dir']}</code>): <code>{','.join(g['colors'])}</code>")
-            
-        if user_gradients:
-            lines.append("\n<b>✨ Пользовательские градиенты:</b>\n")
-            for g in user_gradients:
-                clean_name = g['name'].replace("✨ ", "")
-                lines.append(f"• {clean_name} (<code>{g['dir']}</code>): <code>{','.join(g['colors'])}</code>")
-                
-        await utils.answer(message, "\n".join(lines), parse_mode="HTML")
 
     # ─── .jdump ───────────────────────────────────────────────────────────────
 
