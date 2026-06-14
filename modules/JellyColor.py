@@ -1,10 +1,10 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.8.0                      ║
+# ║                        🎨 JellyColor v4.7.2                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
+# ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
 # ║  v4.7.0: Интерактивная инлайн-статистика (.jstats) с пагинацией  ║
 # ║  v4.7.1: Фикс добавления стикеров в существующие паки            ║
 # ║  v4.7.2: Фикс потокобезопасности fontTools при генерации         ║
-# ║  v4.8.0: Раздельная перекраска текста в TGS (.j/.jc/.jt)         ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -35,7 +35,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 8, 0)
+__version__ = (4, 7, 2)
 
 import asyncio
 import glob
@@ -241,129 +241,6 @@ def _recolor_gradient_stops(raw: list, p: int, nr: float, ng: float, nb: float) 
     return new_raw
 
 
-def _recolor_prop(prop: dict, nr: float, ng: float, nb: float) -> None:
-    """Перекрашивает color-property {a, k} — плоский цвет (fl/st).
-
-    Поддерживает оба формата Lottie:
-      - Старый (AE < 2022): keyframes с полями s и e
-      - Новый (AE >= 2022): keyframes только с полем s (без e)
-        В новом формате «end value» следующего keyframe = s следующего kf.
-    """
-    if not isinstance(prop, dict):
-        return
-    k = prop.get("k")
-    if k is None:
-        return
-    if isinstance(k, list):
-        if len(k) >= 3 and isinstance(k[0], (int, float)):
-            # Static [r,g,b] или [r,g,b,a]
-            prop["k"] = _recolor_rgb(k, nr, ng, nb)
-        else:
-            # Animated keyframes — патчим s (и e если есть, старый формат)
-            for kf in k:
-                if not isinstance(kf, dict):
-                    continue
-                # 's' — значение в начале этого keyframe (есть всегда кроме последнего sentinel)
-                val_s = kf.get("s")
-                if isinstance(val_s, list) and len(val_s) >= 3 and isinstance(val_s[0], (int, float)):
-                    kf["s"] = _recolor_rgb(val_s, nr, ng, nb)
-                # 'e' — только в старом формате Lottie (AE < 2022)
-                val_e = kf.get("e")
-                if isinstance(val_e, list) and len(val_e) >= 3 and isinstance(val_e[0], (int, float)):
-                    kf["e"] = _recolor_rgb(val_e, nr, ng, nb)
-
-
-def _recolor_grad_obj(g_obj: dict, nr: float, ng: float, nb: float) -> None:
-    """
-    Перекрашивает gradient-объект {p, k} из gf/gs.
-    g_obj["p"] — количество цветовых стопов (нужно для разделения цвет/альфа).
-    g_obj["k"] — property-объект {a, k: [...stops...]}.
-
-    Поддерживает оба Lottie формата:
-      - Старый: keyframes с s и e
-      - Новый (AE >= 2022): keyframes только с s (нет поля e)
-    """
-    if not isinstance(g_obj, dict):
-        return
-    p = int(g_obj.get("p", 0))
-    if p == 0:
-        return
-    k_prop = g_obj.get("k")
-    if not isinstance(k_prop, dict):
-        return
-    raw = k_prop.get("k")
-    if raw is None:
-        return
-
-    if isinstance(raw, list) and raw and isinstance(raw[0], (int, float)):
-        # Static gradient stops
-        k_prop["k"] = _recolor_gradient_stops(raw, p, nr, ng, nb)
-    elif isinstance(raw, list):
-        # Animated keyframes: патчим поля s и e (e только в старом формате)
-        for kf in raw:
-            if not isinstance(kf, dict):
-                continue
-            for field in ("s", "e"):
-                val = kf.get(field)
-                if isinstance(val, list) and val and isinstance(val[0], (int, float)):
-                    kf[field] = _recolor_gradient_stops(val, p, nr, ng, nb)
-
-
-def _recolor_sc(obj: dict, nr: float, ng: float, nb: float) -> None:
-    """Solid color layer: поле "sc" = "#rrggbb" (layer ty=1 в Lottie)."""
-    sc_val = obj.get("sc")
-    if isinstance(sc_val, str) and sc_val.startswith("#"):
-        try:
-            sr, sg, sb = hex_to_rgb(sc_val)
-            gray = 0.299 * sr/255 + 0.587 * sg/255 + 0.114 * sb/255
-            obj["sc"] = rgb_to_hex(
-                int(nr * gray * 255),
-                int(ng * gray * 255),
-                int(nb * gray * 255),
-            )
-        except Exception:
-            pass
-
-
-def _recolor_text_doc(obj: dict, nr: float, ng: float, nb: float) -> None:
-    """Live text layer: t.d.k[i].s.fc (fill color) и .sc (stroke color)."""
-    t_obj = obj.get("t")
-    if not isinstance(t_obj, dict):
-        return
-    d_obj = t_obj.get("d")
-    if not isinstance(d_obj, dict):
-        return
-    for kf in d_obj.get("k", []):
-        if isinstance(kf, dict):
-            s_obj = kf.get("s", {})
-            if isinstance(s_obj, dict):
-                for field in ("fc", "sc"):
-                    col = s_obj.get(field)
-                    if isinstance(col, list) and len(col) >= 3:
-                        gray = 0.299 * col[0] + 0.587 * col[1] + 0.114 * col[2]
-                        alpha = col[3] if len(col) > 3 else 1.0
-                        s_obj[field] = [nr*gray, ng*gray, nb*gray, alpha]
-
-
-def _recolor_node(obj: dict, nr: float, ng: float, nb: float) -> bool:
-    """Перекрашивает один dict-узел цветом nr,ng,nb (0..1).
-
-    Возвращает True, если узел был цветовым листом (fl/st/gf/gs) — вызывающий
-    обход в этом случае НЕ должен спускаться глубже (как в исходном _walk).
-    """
-    ty = obj.get("ty", "")
-    if ty == "fl" or ty == "st":
-        _recolor_prop(obj.get("c", {}), nr, ng, nb)
-        return True
-    if ty == "gf" or ty == "gs":
-        _recolor_grad_obj(obj.get("g"), nr, ng, nb)
-        return True
-    # Solid color layer + live text layer — узел продолжает обходиться дальше
-    _recolor_sc(obj, nr, ng, nb)
-    _recolor_text_doc(obj, nr, ng, nb)
-    return False
-
-
 def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
     """
     Полная перекраска TGS: fl, st, gf, gs (включая анимированные keyframes).
@@ -385,159 +262,135 @@ def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
     r, g, b = hex_to_rgb(hex_color)
     nr, ng, nb = r / 255, g / 255, b / 255
 
+    def _recolor_prop(prop: dict) -> None:
+        """Перекрашивает color-property {a, k} — плоский цвет (fl/st).
+
+        Поддерживает оба формата Lottie:
+          - Старый (AE < 2022): keyframes с полями s и e
+          - Новый (AE >= 2022): keyframes только с полем s (без e)
+            В новом формате «end value» следующего keyframe = s следующего kf.
+        """
+        if not isinstance(prop, dict):
+            return
+        k = prop.get("k")
+        if k is None:
+            return
+        if isinstance(k, list):
+            if len(k) >= 3 and isinstance(k[0], (int, float)):
+                # Static [r,g,b] или [r,g,b,a]
+                prop["k"] = _recolor_rgb(k, nr, ng, nb)
+            else:
+                # Animated keyframes — патчим s (и e если есть, старый формат)
+                for kf in k:
+                    if not isinstance(kf, dict):
+                        continue
+                    # 's' — значение в начале этого keyframe (есть всегда кроме последнего sentinel)
+                    val_s = kf.get("s")
+                    if isinstance(val_s, list) and len(val_s) >= 3 and isinstance(val_s[0], (int, float)):
+                        kf["s"] = _recolor_rgb(val_s, nr, ng, nb)
+                    # 'e' — только в старом формате Lottie (AE < 2022)
+                    val_e = kf.get("e")
+                    if isinstance(val_e, list) and len(val_e) >= 3 and isinstance(val_e[0], (int, float)):
+                        kf["e"] = _recolor_rgb(val_e, nr, ng, nb)
+
+    def _recolor_grad_obj(g_obj: dict) -> None:
+        """
+        Перекрашивает gradient-объект {p, k} из gf/gs.
+        g_obj["p"] — количество цветовых стопов (нужно для разделения цвет/альфа).
+        g_obj["k"] — property-объект {a, k: [...stops...]}.
+
+        Поддерживает оба Lottie формата:
+          - Старый: keyframes с s и e
+          - Новый (AE >= 2022): keyframes только с s (нет поля e)
+        """
+        if not isinstance(g_obj, dict):
+            return
+        p = int(g_obj.get("p", 0))
+        if p == 0:
+            return
+        k_prop = g_obj.get("k")
+        if not isinstance(k_prop, dict):
+            return
+        raw = k_prop.get("k")
+        if raw is None:
+            return
+
+        if isinstance(raw, list) and raw and isinstance(raw[0], (int, float)):
+            # Static gradient stops
+            k_prop["k"] = _recolor_gradient_stops(raw, p, nr, ng, nb)
+        elif isinstance(raw, list):
+            # Animated keyframes: патчим поля s и e (e только в старом формате)
+            for kf in raw:
+                if not isinstance(kf, dict):
+                    continue
+                for field in ("s", "e"):
+                    val = kf.get(field)
+                    if isinstance(val, list) and val and isinstance(val[0], (int, float)):
+                        kf[field] = _recolor_gradient_stops(val, p, nr, ng, nb)
+
     def _walk(obj):
         if isinstance(obj, dict):
-            if _recolor_node(obj, nr, ng, nb):
+            ty = obj.get("ty", "")
+
+            # Shape fill — плоский цвет
+            if ty == "fl":
+                _recolor_prop(obj.get("c", {}))
                 return
+
+            # Shape stroke — плоский цвет (v2 пропускала!)
+            if ty == "st":
+                _recolor_prop(obj.get("c", {}))
+                return
+
+            # Gradient fill (v2 пропускала; v3 учитывает g.p для альфа-стопов)
+            if ty == "gf":
+                _recolor_grad_obj(obj.get("g"))
+                return
+
+            # Gradient stroke (v2 пропускала)
+            if ty == "gs":
+                _recolor_grad_obj(obj.get("g"))
+                return
+
+            # Solid color layer: поле "sc" = "#rrggbb" (layer ty=1 в Lottie — число)
+            sc_val = obj.get("sc")
+            if isinstance(sc_val, str) and sc_val.startswith("#"):
+                try:
+                    sr, sg, sb = hex_to_rgb(sc_val)
+                    gray = 0.299 * sr/255 + 0.587 * sg/255 + 0.114 * sb/255
+                    obj["sc"] = rgb_to_hex(
+                        int(nr * gray * 255),
+                        int(ng * gray * 255),
+                        int(nb * gray * 255),
+                    )
+                except Exception:
+                    pass
+
+            # Text layer: t.d.k[i].s.fc (fill color) и .sc (stroke color)
+            t_obj = obj.get("t")
+            if isinstance(t_obj, dict):
+                d_obj = t_obj.get("d")
+                if isinstance(d_obj, dict):
+                    for kf in d_obj.get("k", []):
+                        if isinstance(kf, dict):
+                            s_obj = kf.get("s", {})
+                            if isinstance(s_obj, dict):
+                                for field in ("fc", "sc"):
+                                    col = s_obj.get(field)
+                                    if isinstance(col, list) and len(col) >= 3:
+                                        gray = 0.299 * col[0] + 0.587 * col[1] + 0.114 * col[2]
+                                        alpha = col[3] if len(col) > 3 else 1.0
+                                        s_obj[field] = [nr*gray, ng*gray, nb*gray, alpha]
+
+            # Рекурсия по остальным полям
             for v in obj.values():
                 _walk(v)
+
         elif isinstance(obj, list):
             for item in obj:
                 _walk(item)
 
     _walk(lottie_json)
-    return lottie_json
-
-
-def _collect_text_roots(lottie: dict) -> set:
-    """Множество id() узлов-корней текстового поддерева (gr/слой), внутри
-    которых лежит вставленный/отрисованный текст.
-
-    Использует тот же приоритет, что _replace_textgroup/_get_textgroup_bounds,
-    но БЕЗ рискованной эвристики по числу шейпов (она может задеть иконку):
-
-      1. gr с nm содержащим "textgroup" или nm=="text" (исключая "user");
-      2. иначе — слои ty=5, либо ty=4 c "text" в имени (исключая "user");
-      3. иначе (fallback) — gr, напрямую содержащие глиф-пути (sh nm=="p").
-         Эта сигнатура присутствует ТОЛЬКО если текст был вставлен нашим
-         кодом (_text_to_lottie_shapes), т.е. fallback самогейтится и не
-         срабатывает на обычном рисунке.
-
-    Если ничего не найдено — пустое множество (split == полной перекраске).
-    """
-    elements = []
-    todo = []
-    if isinstance(lottie.get("layers"), list):
-        todo.extend(lottie["layers"])
-    if isinstance(lottie.get("assets"), list):
-        for a in lottie["assets"]:
-            if isinstance(a, dict) and isinstance(a.get("layers"), list):
-                todo.extend(a["layers"])
-    while todo:
-        el = todo.pop()
-        if not isinstance(el, dict):
-            continue
-        elements.append(el)
-        sh = el.get("shapes")
-        if isinstance(sh, list):
-            todo.extend(sh)
-        it = el.get("it")
-        if isinstance(it, list):
-            todo.extend(it)
-
-    def _is_descendant(child, parent):
-        td = []
-        if isinstance(parent.get("shapes"), list):
-            td.extend(parent["shapes"])
-        if isinstance(parent.get("it"), list):
-            td.extend(parent["it"])
-        while td:
-            o = td.pop()
-            if o is child:
-                return True
-            if isinstance(o, dict):
-                if isinstance(o.get("shapes"), list):
-                    td.extend(o["shapes"])
-                if isinstance(o.get("it"), list):
-                    td.extend(o["it"])
-        return False
-
-    def _drop_ancestors(cands):
-        # Оставляем только самые вложенные кандидаты (без предков из того же набора).
-        return [c for c in cands
-                if not any((o is not c) and _is_descendant(o, c) for o in cands)]
-
-    # 1. Именованные textgroup/text группы
-    named = []
-    for el in elements:
-        if el.get("ty") != "gr":
-            continue
-        nm = el.get("nm")
-        if not isinstance(nm, str):
-            continue
-        nl = nm.lower()
-        if "user" in nl:
-            continue
-        if "textgroup" in nl or nl == "text":
-            named.append(el)
-    if named:
-        return {id(x) for x in _drop_ancestors(named)}
-
-    # 2. Текстовые слои: ty=5, либо ty=4 c "text" в имени
-    layers = []
-    for el in elements:
-        ty = el.get("ty")
-        nm = el.get("nm")
-        nl = nm.lower() if isinstance(nm, str) else ""
-        if "user" in nl:
-            continue
-        if ty == 5 or ty == "5":
-            layers.append(el)
-        elif (ty == 4 or ty == "4") and "text" in nl:
-            layers.append(el)
-    if layers:
-        return {id(x) for x in _drop_ancestors(layers)}
-
-    # 3. Fallback: группы с глиф-путями (только после _text_to_lottie_shapes)
-    glyphs = [el for el in elements
-              if el.get("ty") == "gr" and _has_direct_glyph_path(el)]
-    if glyphs:
-        return {id(x) for x in _drop_ancestors(glyphs)}
-
-    return set()
-
-
-def tint_lottie_split(lottie_json: dict, main_hex: str, text_hex: str = None) -> dict:
-    """Раздельная перекраска TGS.
-
-      • основной слой (фон/иконка) → main_hex;
-      • текстовое поддерево (TextGroup / вставленные глифы) → text_hex.
-
-    Если text_hex is None — текстовое поддерево НЕ трогается (сохраняет
-    исходный цвет). Если текстовых корней в файле нет — поведение
-    эквивалентно tint_lottie(main_hex), т.е. для обычных стикеров без текста
-    раздельная перекраска безопасно вырождается в обычную.
-    """
-    mr, mg, mb = hex_to_rgb(main_hex)
-    mnr, mng, mnb = mr / 255, mg / 255, mb / 255
-    tnr = tng = tnb = None
-    if text_hex is not None:
-        tr, tg, tb = hex_to_rgb(text_hex)
-        tnr, tng, tnb = tr / 255, tg / 255, tb / 255
-
-    text_roots = _collect_text_roots(lottie_json)
-
-    def _walk(obj, in_text):
-        if isinstance(obj, dict):
-            # Вход в текстовый корень переключает цвет для всего поддерева.
-            if not in_text and id(obj) in text_roots:
-                in_text = True
-            if in_text:
-                if text_hex is None:
-                    # Текст не перекрашиваем — всё поддерево пропускаем целиком.
-                    return
-                if _recolor_node(obj, tnr, tng, tnb):
-                    return
-            else:
-                if _recolor_node(obj, mnr, mng, mnb):
-                    return
-            for v in obj.values():
-                _walk(v, in_text)
-        elif isinstance(obj, list):
-            for item in obj:
-                _walk(item, in_text)
-
-    _walk(lottie_json, False)
     return lottie_json
 
 
@@ -1463,14 +1316,10 @@ def replace_text_in_tgs(tgs_bytes: bytes, old_text: str, new_text: str, font_pat
 
 # ─── Recolor helpers ──────────────────────────────────────────────────────────
 
-def _recolor_document_sync(data: bytes, mime: str, hex_color: str, is_emoji: bool,
-                           text_hex: str = None, split: bool = False) -> io.BytesIO:
+def _recolor_document_sync(data: bytes, mime: str, hex_color: str, is_emoji: bool) -> io.BytesIO:
     if mime=="application/x-tgsticker":
         lottie=json_loads(gzip.decompress(data))
-        # split → раздельная перекраска (основа vs текстовый слой); иначе обычная.
-        # Картинки (webp) ниже split не поддерживают и игнорируют его.
-        tinted = tint_lottie_split(lottie, hex_color, text_hex) if split else tint_lottie(lottie, hex_color)
-        buf=io.BytesIO(compress_tgs(tinted)); buf.name="sticker.tgs"
+        buf=io.BytesIO(compress_tgs(tint_lottie(lottie,hex_color))); buf.name="sticker.tgs"
     else:
         sz=100 if is_emoji else 512
         img=Image.open(io.BytesIO(data)).convert("RGBA")
@@ -1482,12 +1331,11 @@ def _recolor_document_sync(data: bytes, mime: str, hex_color: str, is_emoji: boo
     return buf
 
 
-async def recolor_document(client, doc, hex_color: str, is_emoji: bool = False,
-                           text_hex: str = None, split: bool = False) -> io.BytesIO:
+async def recolor_document(client, doc, hex_color: str, is_emoji: bool = False) -> io.BytesIO:
     data=await download_cached(client,doc)
     mime=getattr(doc,"mime_type","")
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _recolor_document_sync, data, mime, hex_color, is_emoji, text_hex, split)
+    return await loop.run_in_executor(None, _recolor_document_sync, data, mime, hex_color, is_emoji)
 
 
 def validate_short_name(name: str) -> bool:
@@ -1798,7 +1646,7 @@ class JellyColorMod(loader.Module):
         uid=message.sender_id; pc=len(full_set.documents)
         self._sessions[uid]={"ts":time.time(),"type":tt,"doc":td,"set_id":ts,
             "set_short":getattr(full_set.set,"short_name",""),"full_set":full_set,"pack_count":pc,
-            "scope":None,"color":None,"text_color":None,"split":False,"pack_name":None,
+            "scope":None,"color":None,"pack_name":None,
             "step":"scope" if pc>1 else "color"}
         await message.delete()
         await self.inline.form(text=self._j_text(uid),reply_markup=self._j_markup(uid),message=message,always_allow=[uid])
@@ -1809,20 +1657,10 @@ class JellyColorMod(loader.Module):
         if step=="color":
             sc="один стикер" if s["scope"]=="one" else f"весь пак ({s['pack_count']} шт.)"
             hint = pe("⏰",PE["clock"])+" Сверху — недавние цвета для быстрого повтора." if self._color_history() else ""
-            return pe("🖋",PE["palette"])+f" <b>Выберите цвет фона/иконки</b>\n\nЧто красим: <b>{sc}</b>\n{hint}"
-        if step=="text_color":
-            return (pe("✍️",PE["write"])+f" <b>Цвет текста</b>\n\nФон/иконка: <code>{s['color']}</code>\n\n"
-                    "Выберите цвет для текстового слоя (TGS с буквами/логотипом), либо «🟰 Тот же» / «◻️ Не перекрашивать».\n"
-                    "<i>Для стикеров без текстового слоя выбор не влияет.</i>")
+            return pe("🖋",PE["palette"])+f" <b>Выберите цвет</b>\n\nЧто красим: <b>{sc}</b>\n{hint}"
         if step=="title":
             label=f"<code>{s['color'] or 'без перекраски'}</code>"
-            tlabel=""
-            if s.get("color"):
-                if s.get("split") and s.get("text_color"):
-                    tlabel=f"  Текст: <code>{s['text_color']}</code>"
-                elif s.get("split"):
-                    tlabel="  Текст: <code>без перекраски</code>"
-            return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nЦвет: {label}{tlabel}\n\n<i>Введите название или нажмите «Авто» — короткое имя подберётся само.</i>"
+            return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nЦвет: {label}\n\n<i>Введите название или нажмите «Авто» — короткое имя подберётся само.</i>"
         if step=="name":
             return pe("🏷",PE["sticker"])+f" <b>Короткое имя (short_name)</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите короткое имя (a-z, 0-9, _) или нажмите «Сгенерировать».</i>"
         if step=="exists_choice":
@@ -1850,17 +1688,6 @@ class JellyColorMod(loader.Module):
                         btn["style"] = "primary"
             if pc > 1:
                 rows.append([{"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._j_back,"args":(uid,)}])
-            return rows
-        if step=="text_color":
-            rows = self._color_rows(uid,self._j_tcol,self._j_thex,no_color_cb=None)
-            for r in rows:
-                for btn in r:
-                    btn["emoji_id"] = btn.get("icon_custom_emoji_id")
-                    if "HEX" in btn["text"]:
-                        btn["style"] = "primary"
-            rows.append([{"text":"🟰 Тот же, что фон","icon_custom_emoji_id":PE["ok"],"emoji_id":PE["ok"],"style":"success","callback":self._j_tsame,"args":(uid,)}])
-            rows.append([{"text":"◻️ Не перекрашивать текст","icon_custom_emoji_id":PE["eye"],"emoji_id":PE["eye"],"style":"primary","callback":self._j_tnone,"args":(uid,)}])
-            rows.append([{"text":"⬅️ Назад","icon_custom_emoji_id":PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._j_back,"args":(uid,)}])
             return rows
         if step=="title": return [
             [{"text":"✏️ Ввести название","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"],"style":"primary","input":"Например: My Cool Pack","handler":self._j_title,"args":(uid,)}],
@@ -1901,11 +1728,8 @@ class JellyColorMod(loader.Module):
             else:
                 await call.answer("Назад вернуться нельзя (первый шаг).", show_alert=True)
                 return
-        elif step == "text_color":
-            s["step"] = "color"
         elif step == "title":
-            # Если был выбран цвет фона — возвращаемся к шагу цвета текста.
-            s["step"] = "text_color" if s.get("color") else "color"
+            s["step"] = "color"
         elif step == "name":
             s["step"] = "title"
         elif step == "exists_choice":
@@ -1937,7 +1761,7 @@ class JellyColorMod(loader.Module):
     async def _j_col(self,call,uid,hex_color):
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["color"]=hex_color; s["step"]="text_color"
+        s["color"]=hex_color; s["step"]="title"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_hex(self,call,value,uid):
@@ -1946,44 +1770,13 @@ class JellyColorMod(loader.Module):
         c=value.strip()
         if not c.startswith("#"): c="#"+c
         if not re.fullmatch(r"#[0-9a-fA-F]{6}",c): await call.answer("Неверный HEX.",show_alert=True); return
-        s["color"]=c.upper(); s["step"]="text_color"
+        s["color"]=c.upper(); s["step"]="title"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_no_color(self,call,uid):
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        # Без перекраски фона — шаг цвета текста пропускаем.
-        s["color"]=None; s["text_color"]=None; s["split"]=False; s["step"]="title"
-        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
-
-    # ── Цвет текста (TGS split) ──
-    async def _j_tcol(self,call,uid,hex_color):
-        s=self._sessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["text_color"]=hex_color; s["split"]=True; s["step"]="title"
-        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
-
-    async def _j_thex(self,call,value,uid):
-        s=self._sessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        c=value.strip()
-        if not c.startswith("#"): c="#"+c
-        if not re.fullmatch(r"#[0-9a-fA-F]{6}",c): await call.answer("Неверный HEX.",show_alert=True); return
-        s["text_color"]=c.upper(); s["split"]=True; s["step"]="title"
-        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
-
-    async def _j_tsame(self,call,uid):
-        # Текст красится тем же цветом, что и фон (обычная сплошная перекраска).
-        s=self._sessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["text_color"]=None; s["split"]=False; s["step"]="title"
-        await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
-
-    async def _j_tnone(self,call,uid):
-        # Текстовый слой оставляем как есть (split, text_hex=None).
-        s=self._sessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["text_color"]=None; s["split"]=True; s["step"]="title"
+        s["color"]=None; s["step"]="title"
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_auto(self,call,uid):
@@ -2052,7 +1845,6 @@ class JellyColorMod(loader.Module):
         if not s: return
         try:
             color=s["color"]; pname=s["pack_name"]; ptype=s["type"]
-            text_color=s.get("text_color"); split=s.get("split",False)
             docs=[s["doc"]] if (s["scope"]=="one" or s["pack_count"]==1) else list(s["full_set"].documents)
             me=await self._client.get_me(); mee=await self._client.get_input_entity("me")
             async def _fn(i,doc):
@@ -2060,7 +1852,7 @@ class JellyColorMod(loader.Module):
                 orig_mime=getattr(doc,"mime_type","image/webp")
                 mime="application/x-tgsticker" if orig_mime=="application/x-tgsticker" else "image/webp"
                 if color:
-                    buf=await recolor_document(self._client,doc,color,is_emoji=_is_emoji,text_hex=text_color,split=split)
+                    buf=await recolor_document(self._client,doc,color,is_emoji=_is_emoji)
                 else:
                     # Без перекраски — только ресайз для статичных
                     data=await download_cached(self._client,doc)
@@ -2141,31 +1933,19 @@ class JellyColorMod(loader.Module):
 
     @loader.command()
     async def jc(self, message: Message):
-        """Быстрая перекраска: .jc #ФОН [#ТЕКСТ|-] (TGS: 2-й цвет — для текстового слоя, «-» = не красить)"""
+        """Быстрая перекраска с созданием пака из 1 эмодзи: .jc #HEX (ответьте на эмодзи/стикер)"""
         reply=await message.get_reply_message()
         args=utils.get_args_raw(message).strip()
         if not reply or not args:
-            await utils.answer(message,pe("ℹ️",PE["info"])+" Ответьте на эмодзи и напишите <code>.jc #FF3B30</code>\nДля TGS можно задать цвет текста: <code>.jc #FF3B30 #FFFFFF</code> или <code>.jc #FF3B30 -</code> (текст не красить)"); return
-        parts=args.split()
-        hc=parts[0] if parts[0].startswith("#") else "#"+parts[0]
+            await utils.answer(message,pe("ℹ️",PE["info"])+" Ответьте на эмодзи и напишите <code>.jc #FF3B30</code>"); return
+        hc=args if args.startswith("#") else "#"+args
         if not re.fullmatch(r"#[0-9a-fA-F]{6}",hc): await utils.answer(message,pe("❌",PE["err"])+" Неверный HEX"); return
-        # Опциональный 2-й аргумент — цвет текстового слоя (TGS).
-        text_hex=None; split=False
-        if len(parts)>1:
-            split=True
-            tk=parts[1]
-            if tk in ("-","none","нет","x"):
-                text_hex=None  # split, текст не перекрашиваем
-            else:
-                text_hex=tk if tk.startswith("#") else "#"+tk
-                if not re.fullmatch(r"#[0-9a-fA-F]{6}",text_hex): await utils.answer(message,pe("❌",PE["err"])+" Неверный HEX цвета текста"); return
-                text_hex=text_hex.upper()
         td,tt,_=await self._resolve_target(reply)
         if not td: await utils.answer(message,pe("❌",PE["err"])+" Эмодзи/стикер не найден."); return
         msg=await utils.answer(message,pe("⏰",PE["clock"])+" Создаю...")
         try:
             is_emoji=(tt=="emoji")
-            buf=await recolor_document(self._client,td,hc,is_emoji=is_emoji,text_hex=text_hex,split=split)
+            buf=await recolor_document(self._client,td,hc,is_emoji=is_emoji)
             
             # Save a copy to /tmp for debugging
             try:
@@ -2207,8 +1987,7 @@ class JellyColorMod(loader.Module):
         self._expire()
         uid=message.sender_id
         self._tsessions[uid]={"ts":time.time(),"step":"template","template":None,"text":None,
-                               "color":None,"text_color":None,"split":False,"neon":False,
-                               "pack_name":None,"preview_msg":None, "scale_factor": 0.8}
+                               "color":None,"pack_name":None,"preview_msg":None, "scale_factor": 0.8}
         await message.delete()
         await self.inline.form(text=self._jt_text(uid),reply_markup=self._jt_markup(uid),message=message,always_allow=[uid])
     def _jt_text(self, uid):
@@ -2227,20 +2006,8 @@ class JellyColorMod(loader.Module):
         if step=="color":
             hist=self._color_history()
             hs=("\n"+pe("⏰",PE["clock"])+" Последние: "+"  ".join(f"<code>{c}</code>" for c in hist)) if hist else ""
-            return pe("🎨",PE["palette"])+f" <b>Цвет эмодзи (фон/иконка)</b>\n\nТекст: <code>{s['text']}</code>{hs}"
-        if step=="text_color":
-            return (pe("✍️",PE["write"])+f" <b>Цвет текста</b>\n\nФон/иконка: <code>{s['color']}</code>\n\n"
-                    "Выберите цвет для вставленных букв, либо «🟰 Тот же», «✨ Неон» (свечение) или «◻️ Не перекрашивать».")
-        if step=="title":
-            ct = (f"  Цвет: <code>{s['color']}</code>" if s.get('color') else "  (без перекраски)")
-            if s.get('color'):
-                if s.get('neon'):
-                    ct += "  Текст: <code>неон</code>"
-                elif s.get('split') and s.get('text_color'):
-                    ct += f"  Текст: <code>{s['text_color']}</code>"
-                elif s.get('split'):
-                    ct += "  Текст: <code>без перекраски</code>"
-            return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nТекст: <code>{s['text']}</code>" + ct + "\n\n<i>Введите отображаемое название (любые символы)</i>"
+            return pe("🎨",PE["palette"])+f" <b>Цвет эмодзи</b>\n\nТекст: <code>{s['text']}</code>{hs}"
+        if step=="title": return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nТекст: <code>{s['text']}</code>" + (f"  Цвет: <code>{s['color']}</code>" if s.get('color') else "  (без перекраски)") + "\n\n<i>Введите отображаемое название (любые символы)</i>"
         if step=="name": return pe("🏷",PE["sticker"])+f" <b>short_name пака</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите short_name — только a-z, 0-9, _</i>"
         if step=="exists_choice":
             return pe("⚠️",PE["info"])+f" <b>Пак уже существует!</b>\n\nПак <code>{s['pack_name']}</code> уже создан на вашем аккаунте. Выберите действие:"
@@ -2305,20 +2072,6 @@ class JellyColorMod(loader.Module):
                         btn["style"] = "primary"
             rows.append([{"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"], "style": "danger", "callback": self._jt_back, "args": (uid,)}])
             return rows
-        if step=="text_color":
-            rows=self._color_rows(uid,self._jt_tcol,self._jt_thex,no_color_cb=None)
-            for r in rows:
-                for btn in r:
-                    btn["emoji_id"] = btn.get("icon_custom_emoji_id")
-                    if "HEX" in btn["text"]:
-                        btn["style"] = "primary"
-            rows.append([
-                {"text":"🟰 Тот же","icon_custom_emoji_id":PE["ok"],"emoji_id":PE["ok"],"style":"success","callback":self._jt_tsame,"args":(uid,)},
-                {"text":"✨ Неон","icon_custom_emoji_id":PE["palette"],"emoji_id":PE["palette"],"style":"primary","callback":self._jt_tneon,"args":(uid,)},
-            ])
-            rows.append([{"text":"◻️ Не перекрашивать текст","icon_custom_emoji_id":PE["eye"],"emoji_id":PE["eye"],"style":"primary","callback":self._jt_tnone,"args":(uid,)}])
-            rows.append([{"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"], "style": "danger", "callback": self._jt_back, "args": (uid,)}])
-            return rows
         if step=="title": return [
             [{"text":"✏️ Ввести название","icon_custom_emoji_id":PE["sticker"],"emoji_id":PE["sticker"], "style": "primary", "input":"Например: My Cool Pack","handler":self._jt_title,"args":(uid,)}],
             [{"text":"🎲 Авто (по тексту)","icon_custom_emoji_id":PE["ok"],"emoji_id":PE["ok"], "style": "success", "callback":self._jt_auto,"args":(uid,)}],
@@ -2359,11 +2112,8 @@ class JellyColorMod(loader.Module):
             s["step"] = "font"
         elif step == "color":
             s["step"] = "preview"
-        elif step == "text_color":
-            s["step"] = "color"
         elif step == "title":
-            # Если фон красился — возвращаемся к шагу цвета текста.
-            s["step"] = "text_color" if s.get("color") else "color"
+            s["step"] = "color"
         elif step == "name":
             s["step"] = "title"
         elif step == "exists_choice":
@@ -2562,7 +2312,7 @@ class JellyColorMod(loader.Module):
     async def _jt_col(self,call,uid,hc):
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["color"]=hc; s["step"]="text_color"
+        s["color"]=hc; s["step"]="title"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
     async def _jt_hex(self,call,value,uid):
@@ -2571,51 +2321,13 @@ class JellyColorMod(loader.Module):
         c=value.strip()
         if not c.startswith("#"): c="#"+c
         if not re.fullmatch(r"#[0-9a-fA-F]{6}",c): await call.answer("Неверный HEX.",show_alert=True); return
-        s["color"]=c.upper(); s["step"]="text_color"
+        s["color"]=c.upper(); s["step"]="title"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
     async def _jt_no_color(self,call,uid):
         s=self._tsessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        # Без перекраски эмодзи — шаг цвета текста пропускаем.
-        s["color"]=None; s["text_color"]=None; s["split"]=False; s["neon"]=False; s["step"]="title"
-        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
-
-    # ── Цвет текста (TGS split / неон) ──
-    async def _jt_tcol(self,call,uid,hc):
-        s=self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["text_color"]=hc; s["split"]=True; s["neon"]=False; s["step"]="title"
-        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
-
-    async def _jt_thex(self,call,value,uid):
-        s=self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        c=value.strip()
-        if not c.startswith("#"): c="#"+c
-        if not re.fullmatch(r"#[0-9a-fA-F]{6}",c): await call.answer("Неверный HEX.",show_alert=True); return
-        s["text_color"]=c.upper(); s["split"]=True; s["neon"]=False; s["step"]="title"
-        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
-
-    async def _jt_tsame(self,call,uid):
-        # Текст красится тем же цветом, что эмодзи (сплошная перекраска).
-        s=self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["text_color"]=None; s["split"]=False; s["neon"]=False; s["step"]="title"
-        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
-
-    async def _jt_tneon(self,call,uid):
-        # Неоновый стиль текста (пастельная заливка + цветная обводка).
-        s=self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["text_color"]=None; s["split"]=False; s["neon"]=True; s["step"]="title"
-        await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
-
-    async def _jt_tnone(self,call,uid):
-        # Текстовый слой оставляем как есть (split, text_hex=None).
-        s=self._tsessions.get(uid)
-        if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["text_color"]=None; s["split"]=True; s["neon"]=False; s["step"]="title"
+        s["color"]=None; s["step"]="title"
         await call.edit(text=self._jt_text(uid),reply_markup=self._jt_markup(uid))
 
     async def _jt_auto(self,call,uid):
@@ -2683,7 +2395,6 @@ class JellyColorMod(loader.Module):
         if not s: return
         try:
             tmpl,txt,pname,color=s["template"],s["text"],s["pack_name"],s.get("color")
-            text_color=s.get("text_color"); split=s.get("split",False); neon=s.get("neon",False)
             try:
                 fs=await self._client(functions.messages.GetStickerSetRequest(
                     stickerset=types.InputStickerSetShortName(short_name=tmpl["short_name"]),hash=0))
@@ -2701,16 +2412,8 @@ class JellyColorMod(loader.Module):
                         lottie_obj = json_loads(gzip.decompress(raw))
                         modify_lottie(lottie_obj, txt, s.get("font_path"), scale_factor=s.get("scale_factor", 1.0))
                         if color:
-                            if neon:
-                                # Неон: сплошная перекраска + пастельная заливка/обводка текста.
-                                tint_lottie(lottie_obj, color)
-                                _set_text_neon_style(lottie_obj, color)
-                            elif split:
-                                # Раздельно: фон → color, текст → text_color (или не трогаем).
-                                tint_lottie_split(lottie_obj, color, text_color)
-                            else:
-                                # Тот же цвет для всего.
-                                tint_lottie(lottie_obj, color)
+                            tint_lottie(lottie_obj, color)
+                            _set_text_neon_style(lottie_obj, color)
                         return compress_tgs(lottie_obj)
                     patched = await loop.run_in_executor(None, _process_tgs)
                     buf=io.BytesIO(patched); buf.name="sticker.tgs"
