@@ -1417,14 +1417,12 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
                         return None, f"Не удалось перезаписать пак {curr_short}: {del_err}"
                 else:
                     try:
-                        add_sem = asyncio.Semaphore(10)
-                        async def _add_one(sticker):
-                            async with add_sem:
-                                await client(functions.stickers.AddStickerToSetRequest(
-                                    stickerset=types.InputStickerSetShortName(short_name=curr_short),
-                                    sticker=sticker
-                                ))
-                        await asyncio.gather(*[_add_one(s) for s in chunk])
+                        for s in chunk:
+                            await client(functions.stickers.AddStickerToSetRequest(
+                                stickerset=types.InputStickerSetShortName(short_name=curr_short),
+                                sticker=s
+                            ))
+                            await asyncio.sleep(0.2)
                         created_names.append(curr_short)
                     except Exception as add_err:
                         logger.exception(f"Failed to append stickers to existing stickerpack {curr_short}")
