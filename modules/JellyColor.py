@@ -1,10 +1,9 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.6.1                      ║
+# ║                        🎨 JellyColor v4.6.2                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.6.0: Переоформлён UI (история цветов, авто-название),        ║
-# ║          полностью убрана система градиентов                     ║
 # ║  v4.6.1: Текст-группа распознаётся в паках с вырезанными именами ║
 # ║          групп (реэкспорт @EmojiSaverBot) по сигнатуре nm=="p"   ║
+# ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -35,7 +34,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 6, 1)
+__version__ = (4, 6, 2)
 
 import asyncio
 import glob
@@ -803,10 +802,11 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
         return []
     try:
         ft = _get_cached_font(font_path)
+        gs = ft.getGlyphSet()
+        cm = ft.getBestCmap() or {}
     except Exception as e:
-        logger.error(f"fontTools: failed to load font {font_path}: {e}")
+        logger.error(f"fontTools: failed to load font {font_path} or get glyphset: {e}")
         return []
-    gs=ft.getGlyphSet(); cm=ft.getBestCmap() or {}
     upm=ft["head"].unitsPerEm
     os2=ft.get("OS/2")
     cap_h=float(getattr(os2,"sCapHeight",0) or getattr(os2,"sTypoAscender",upm*0.72))
@@ -2509,6 +2509,20 @@ class JellyColorMod(loader.Module):
             logger.exception("Failed to download font in .jaddfont command")
             await utils.answer(message, pe("❌", PE["err"]) + f" Не удалось скачать шрифт: <code>{e}</code>")
             return
+            
+        if HAS_FONTTOOLS:
+            try:
+                ft = TTFont(dest_path)
+                ft.getGlyphSet()
+            except Exception as e:
+                logger.error(f"Invalid uploaded font {dest_path}: {e}")
+                if os.path.exists(dest_path):
+                    try:
+                        os.remove(dest_path)
+                    except Exception:
+                        pass
+                await utils.answer(message, pe("❌", PE["err"]) + f" Недопустимый файл шрифта (ошибка чтения): <code>{e}</code>")
+                return
             
         user_fonts.append({
             "title": safe_title,
