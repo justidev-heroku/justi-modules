@@ -1,8 +1,8 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.6.3                      ║
+# ║                        🎨 JellyColor v4.7.0                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
 # ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
-# ║  v4.6.3: Ограничена история статистики для предотвращения лагов  ║
+# ║  v4.7.0: Интерактивная инлайн-статистика (.jstats) с пагинацией  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -33,7 +33,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 6, 3)
+__version__ = (4, 7, 0)
 
 import asyncio
 import glob
@@ -2598,31 +2598,171 @@ class JellyColorMod(loader.Module):
     @loader.command()
     async def jstats(self, message: Message):
         """Статистика операций"""
+        if not hasattr(self, "_stats_sessions"):
+            self._stats_sessions = {}
         stats=self.db.get("JellyColor","stats",[])
         if not stats: await utils.answer(message,pe("📊",PE["stats"])+" Пусто."); return
+        uid=message.sender_id
+        self._stats_sessions[uid] = {"page": 0}
+        await message.delete()
+        await self.inline.form(
+            text=self._jstats_text(uid),
+            reply_markup=self._jstats_markup(uid),
+            message=message,
+            always_allow=[uid]
+        )
+
+    def _jstats_text(self, uid):
+        s = self._stats_sessions.get(uid)
+        if not s: return pe("📊",PE["stats"])+" Сессия устарела."
+        stats = self.db.get("JellyColor", "stats", [])
+        if not stats: return pe("📊",PE["stats"])+" Пусто."
         
         total_ops = self.db.get("JellyColor", "total_operations", len(stats))
         total_s = self.db.get("JellyColor", "total_stickers", sum(e.get("count",0) for e in stats))
         if total_ops == 0: total_ops = len(stats)
         if total_s == 0: total_s = sum(e.get("count",0) for e in stats)
 
-        chist={}
+        chist = {}
         for e in stats:
-            c=e.get("color","")
-            if c and c!="text": chist[c]=chist.get(c,0)+1
-        top=[f"<code>{c}</code>×{n}" for c,n in sorted(chist.items(),key=lambda x:-x[1])[:3]]
-        lines=[
-            pe("📊",PE["stats"])+" <b>JellyColor</b>\n",
+            c = e.get("color","")
+            if c and c != "text": chist[c] = chist.get(c,0) + 1
+        top = [f"<code>{c}</code>×{n} " for c,n in sorted(chist.items(), key=lambda x: -x[1])[:3]]
+        
+        rev_stats = list(reversed(stats))
+        page = s["page"]
+        per_page = 5
+        total_pages = max(1, (len(rev_stats) + per_page - 1) // per_page)
+        if page >= total_pages:
+            page = total_pages - 1
+            s["page"] = page
+
+        items = rev_stats[page * per_page : (page + 1) * per_page]
+        
+        lines = [
+            pe("📊",PE["stats"])+" <b>JellyColor — Статистика</b>\n",
             pe("📦",PE["pack"])+f" Операций: <b>{total_ops}</b> | Стикеров: <b>{total_s}</b>",
-            pe("🎨",PE["palette"])+" Топ цвета: "+("  ".join(top) or "—"),
-            "\n<b>Последние 15:</b>",
+            pe("🎨",PE["palette"])+" Топ цвета: "+("".join(top) or "—"),
+            f"\n<b>История (Страница {page + 1} из {total_pages}):</b>",
         ]
-        for i,e in enumerate(reversed(stats[-15:]),1):
-            c=e.get("color","?"); t=e.get("type","emoji")
-            cs="текст" if c=="text" else f"<code>{c}</code>"
-            ti=pe("🏷",PE["sticker"]) if t=="sticker" else pe("✅",PE["ok"])
-            lines.append(f"\n<b>{i}.</b> {ti} <code>{e['name']}</code>\n   {pe(chr(0x1f58c),PE['brush'])} {cs} | {pe(chr(0x1f4e6),PE['pack'])} <b>{e['count']}</b>\n   <a href=\"{e['link']}\">{e['link']}</a>")
-        await utils.answer(message,"\n".join(lines),parse_mode="HTML")
+        
+        for idx, e in enumerate(items, 1):
+            c = e.get("color", "?")
+            t = e.get("type", "emoji")
+            cs = "текст" if c == "text" else f"<code>{c}</code>"
+            ti = pe("🏷",PE["sticker"]) if t == "sticker" else pe("✅",PE["ok"])
+            lines.append(
+                f"\n<b>{idx}.</b> {ti} <code>{e['name']}</code>\n"
+                f"   {pe(chr(0x1f58c),PE['brush'])} {cs} | {pe(chr(0x1f4e6),PE['pack'])} <b>{e['count']}</b>\n"
+                f"   <a href=\"{e['link']}\">{e['link']}</a>"
+            )
+            
+        return "\n".join(lines)
+
+    def _jstats_markup(self, uid):
+        return self._patch_allow(self.__jstats_markup_inner(uid), uid)
+
+    def __jstats_markup_inner(self, uid):
+        s = self._stats_sessions.get(uid)
+        if not s: return []
+        stats = self.db.get("JellyColor", "stats", [])
+        if not stats: return []
+        
+        rev_stats = list(reversed(stats))
+        page = s["page"]
+        per_page = 5
+        total_pages = max(1, (len(rev_stats) + per_page - 1) // per_page)
+        
+        items = rev_stats[page * per_page : (page + 1) * per_page]
+        
+        del_row = []
+        for idx, e in enumerate(items, 1):
+            del_row.append({
+                "text": f"❌ {idx}",
+                "callback": self._jstats_del_item,
+                "args": (uid, e["name"])
+            })
+            
+        nav_row = []
+        if page > 0:
+            nav_row.append({
+                "text": "◀️ Назад",
+                "callback": self._jstats_change_page,
+                "args": (uid, -1)
+            })
+        
+        nav_row.append({
+            "text": f"Стр. {page + 1}/{total_pages}",
+            "callback": self._jstats_noop,
+            "args": ()
+        })
+        
+        if (page + 1) < total_pages:
+            nav_row.append({
+                "text": "Вперед ▶️",
+                "callback": self._jstats_change_page,
+                "args": (uid, 1)
+            })
+            
+        control_row = [
+            {"text": "🗑 Очистить всё", "style": "danger", "callback": self._jstats_clear_all, "args": (uid,)},
+            {"text": "🚪 Закрыть", "style": "primary", "callback": self._jstats_close, "args": (uid,)}
+        ]
+        
+        markup = []
+        if del_row:
+            markup.append(del_row)
+        markup.append(nav_row)
+        markup.append(control_row)
+        return markup
+
+    async def _jstats_noop(self, call):
+        await call.answer("Это индикатор страниц.")
+
+    async def _jstats_change_page(self, call, uid, delta):
+        s = self._stats_sessions.get(uid)
+        if not s: await call.answer("Сессия устарела.", show_alert=True); return
+        stats = self.db.get("JellyColor", "stats", [])
+        rev_stats = list(reversed(stats))
+        per_page = 5
+        total_pages = max(1, (len(rev_stats) + per_page - 1) // per_page)
+        
+        new_page = max(0, min(total_pages - 1, s["page"] + delta))
+        s["page"] = new_page
+        await call.edit(text=self._jstats_text(uid), reply_markup=self._jstats_markup(uid))
+
+    async def _jstats_close(self, call, uid):
+        self._stats_sessions.pop(uid, None)
+        await call.delete()
+
+    async def _jstats_clear_all(self, call, uid):
+        self.db.set("JellyColor", "stats", [])
+        self.db.set("JellyColor", "total_operations", 0)
+        self.db.set("JellyColor", "total_stickers", 0)
+        self._stats_sessions.pop(uid, None)
+        await call.answer("🗑 Вся статистика успешно очищена!", show_alert=True)
+        await call.delete()
+
+    async def _jstats_del_item(self, call, uid, name):
+        stats = self.db.get("JellyColor", "stats", [])
+        deleted_count = sum(e.get("count", 0) for e in stats if e.get("name") == name)
+        deleted_ops = sum(1 for e in stats if e.get("name") == name)
+        
+        new_stats = [e for e in stats if e.get("name") != name]
+        
+        total_ops = self.db.get("JellyColor", "total_operations", len(stats))
+        total_s = self.db.get("JellyColor", "total_stickers", sum(e.get("count",0) for e in stats))
+        self.db.set("JellyColor", "total_operations", max(0, total_ops - deleted_ops))
+        self.db.set("JellyColor", "total_stickers", max(0, total_s - deleted_count))
+        
+        self.db.set("JellyColor", "stats", new_stats)
+        await call.answer(f"Удалено: {name}", show_alert=True)
+        
+        if not new_stats:
+            self._stats_sessions.pop(uid, None)
+            await call.delete()
+        else:
+            await call.edit(text=self._jstats_text(uid), reply_markup=self._jstats_markup(uid))
 
     # ─── .jdel ────────────────────────────────────────────────────────────────
 
