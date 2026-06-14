@@ -1,9 +1,8 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.6.2                      ║
+# ║                        🎨 JellyColor v4.6.3                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
-# ║  v4.6.1: Текст-группа распознаётся в паках с вырезанными именами ║
-# ║          групп (реэкспорт @EmojiSaverBot) по сигнатуре nm=="p"   ║
 # ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
+# ║  v4.6.3: Ограничена история статистики для предотвращения лагов  ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -34,7 +33,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 6, 2)
+__version__ = (4, 6, 3)
 
 import asyncio
 import glob
@@ -1898,7 +1897,19 @@ class JellyColorMod(loader.Module):
             stats=self.db.get("JellyColor","stats",[])
             for name, link in zip(fn, links):
                 stats.append({"name":name,"link":link,"color":clabel,"count":len(ordered),"type":ptype,"ts":int(time.time())})
-            self.db.set("JellyColor","stats",stats)
+            
+            # Update lifetime totals
+            total_ops = self.db.get("JellyColor", "total_operations", 0)
+            if total_ops == 0 and stats:
+                total_ops = len(stats) - len(fn)
+            self.db.set("JellyColor", "total_operations", total_ops + len(fn))
+
+            total_st = self.db.get("JellyColor", "total_stickers", 0)
+            if total_st == 0 and stats:
+                total_st = sum(e.get("count",0) for e in stats) - len(ordered) * len(fn)
+            self.db.set("JellyColor", "total_stickers", total_st + len(ordered) * len(fn))
+
+            self.db.set("JellyColor","stats",stats[-500:])
             tl="Стикерпак" if ptype=="sticker" else "Эмодзи-пак"
             tag=f"<code>{clabel}</code>"
             await call.edit(
@@ -2440,7 +2451,19 @@ class JellyColorMod(loader.Module):
             stats=self.db.get("JellyColor","stats",[])
             for name, link in zip(fn, links):
                 stats.append({"name":name,"link":link,"color":color or "text","count":len(ordered),"type":"emoji","ts":int(time.time())})
-            self.db.set("JellyColor","stats",stats)
+            
+            # Update lifetime totals
+            total_ops = self.db.get("JellyColor", "total_operations", 0)
+            if total_ops == 0 and stats:
+                total_ops = len(stats) - len(fn)
+            self.db.set("JellyColor", "total_operations", total_ops + len(fn))
+
+            total_st = self.db.get("JellyColor", "total_stickers", 0)
+            if total_st == 0 and stats:
+                total_st = sum(e.get("count",0) for e in stats) - len(ordered) * len(fn)
+            self.db.set("JellyColor", "total_stickers", total_st + len(ordered) * len(fn))
+
+            self.db.set("JellyColor","stats",stats[-500:])
             await call.edit(
                 text=(pe("✅",PE["ok"])+" <b>Готово!</b>\n\n"
                       +pe("✍️",PE["write"])+f" Текст: <code>{txt}</code>\n"
@@ -2577,7 +2600,12 @@ class JellyColorMod(loader.Module):
         """Статистика операций"""
         stats=self.db.get("JellyColor","stats",[])
         if not stats: await utils.answer(message,pe("📊",PE["stats"])+" Пусто."); return
-        total_s=sum(e.get("count",0) for e in stats)
+        
+        total_ops = self.db.get("JellyColor", "total_operations", len(stats))
+        total_s = self.db.get("JellyColor", "total_stickers", sum(e.get("count",0) for e in stats))
+        if total_ops == 0: total_ops = len(stats)
+        if total_s == 0: total_s = sum(e.get("count",0) for e in stats)
+
         chist={}
         for e in stats:
             c=e.get("color","")
@@ -2585,7 +2613,7 @@ class JellyColorMod(loader.Module):
         top=[f"<code>{c}</code>×{n}" for c,n in sorted(chist.items(),key=lambda x:-x[1])[:3]]
         lines=[
             pe("📊",PE["stats"])+" <b>JellyColor</b>\n",
-            pe("📦",PE["pack"])+f" Операций: <b>{len(stats)}</b> | Стикеров: <b>{total_s}</b>",
+            pe("📦",PE["pack"])+f" Операций: <b>{total_ops}</b> | Стикеров: <b>{total_s}</b>",
             pe("🎨",PE["palette"])+" Топ цвета: "+("  ".join(top) or "—"),
             "\n<b>Последние 15:</b>",
         ]
@@ -2606,6 +2634,15 @@ class JellyColorMod(loader.Module):
         stats=self.db.get("JellyColor","stats",[])
         new=[e for e in stats if e.get("name")!=args]
         if len(new)==len(stats): await utils.answer(message,pe("❌",PE["err"])+f" <code>{args}</code> не найден."); return
+        
+        deleted_count = sum(e.get("count", 0) for e in stats if e.get("name")==args)
+        deleted_ops = sum(1 for e in stats if e.get("name")==args)
+        
+        total_ops = self.db.get("JellyColor", "total_operations", len(stats))
+        total_s = self.db.get("JellyColor", "total_stickers", sum(e.get("count",0) for e in stats))
+        self.db.set("JellyColor", "total_operations", max(0, total_ops - deleted_ops))
+        self.db.set("JellyColor", "total_stickers", max(0, total_s - deleted_count))
+
         self.db.set("JellyColor","stats",new)
         await utils.answer(message,pe("✅",PE["ok"])+f" Удалено: <code>{args}</code>")
 
