@@ -1,9 +1,10 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.7.1                      ║
+# ║                        🎨 JellyColor v4.7.2                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
 # ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
 # ║  v4.7.0: Интерактивная инлайн-статистика (.jstats) с пагинацией  ║
 # ║  v4.7.1: Фикс добавления стикеров в существующие паки            ║
+# ║  v4.7.2: Фикс потокобезопасности fontTools при генерации         ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
 # MIT License
@@ -34,7 +35,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 7, 1)
+__version__ = (4, 7, 2)
 
 import asyncio
 import glob
@@ -84,15 +85,16 @@ try:
 except ImportError:
     HAS_ORJSON = False
 
-_FONT_CACHE = {}
+_FONT_BYTES_CACHE = {}
 
 
 def _get_cached_font(font_path: str):
-    ft = _FONT_CACHE.get(font_path)
-    if ft is None:
-        ft = TTFont(font_path)
-        _FONT_CACHE[font_path] = ft
-    return ft
+    data = _FONT_BYTES_CACHE.get(font_path)
+    if data is None:
+        with open(font_path, "rb") as f:
+            data = f.read()
+        _FONT_BYTES_CACHE[font_path] = data
+    return TTFont(io.BytesIO(data))
 
 
 def json_loads(data: bytes) -> dict:
