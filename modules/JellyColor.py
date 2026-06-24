@@ -1,5 +1,5 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.7.2                      ║
+# ║                        🎨 JellyColor v4.7.3                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
 # ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
 # ║  v4.7.0: Интерактивная инлайн-статистика (.jstats) с пагинацией  ║
@@ -35,7 +35,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 7, 2)
+__version__ = (4, 7, 3)
 
 import asyncio
 import glob
@@ -831,40 +831,44 @@ def _text_to_lottie_shapes(text, font_path, cx, cy, height, max_width=None):
     shapes=[]; cur_x=start_x
     for gn,adv in glyph_list:
         if gn is None: cur_x+=adv*sc; continue
-        pen=DecomposingRecordingPen(gs); gs[gn].draw(pen)
-        vs_,ii_,oo_=[],[],[]
-        def _close():
-            if vs_:
-                shapes.append({"ty":"sh","nm":"p","ks":{"a":0,"k":{"c":True,
-                    "v":[list(v) for v in vs_],"i":[list(v) for v in ii_],"o":[list(v) for v in oo_]}}})
-        for op,args in pen.value:
-            if op=="moveTo":
-                _close(); vs_.clear(); ii_.clear(); oo_.clear()
-                fx,fy=args[0]; lx=fx*sc+cur_x; ly=base_y-fy*sc
-                vs_.append([lx,ly]); ii_.append([0.,0.]); oo_.append([0.,0.])
-            elif op=="lineTo":
-                fx,fy=args[0]; lx=fx*sc+cur_x; ly=base_y-fy*sc
-                vs_.append([lx,ly]); ii_.append([0.,0.]); oo_.append([0.,0.])
-            elif op=="curveTo":
-                (c1x,c1y),(c2x,c2y),(ex,ey)=args
-                pvx,pvy=vs_[-1]
-                oo_[-1]=[c1x*sc+cur_x-pvx,base_y-c1y*sc-pvy]
-                nvx=ex*sc+cur_x; nvy=base_y-ey*sc
-                vs_.append([nvx,nvy]); ii_.append([c2x*sc+cur_x-nvx,base_y-c2y*sc-nvy]); oo_.append([0.,0.])
-            elif op=="qCurveTo":
-                pts=list(args); p0x,p0y=vs_[-1]
-                for qi in range(len(pts)-1):
-                    qcx,qcy=pts[qi]
-                    qex,qey=pts[qi+1] if qi==len(pts)-2 else ((pts[qi][0]+pts[qi+1][0])/2,(pts[qi][1]+pts[qi+1][1])/2)
-                    qcs=(qcx*sc+cur_x,base_y-qcy*sc); qes=(qex*sc+cur_x,base_y-qey*sc)
-                    c1s=(p0x+2/3*(qcs[0]-p0x),p0y+2/3*(qcs[1]-p0y))
-                    c2s=(qes[0]+2/3*(qcs[0]-qes[0]),qes[1]+2/3*(qcs[1]-qes[1]))
-                    oo_[-1]=[c1s[0]-p0x,c1s[1]-p0y]
-                    vs_.append(list(qes)); ii_.append([c2s[0]-qes[0],c2s[1]-qes[1]]); oo_.append([0.,0.])
-                    p0x,p0y=qes
-            elif op in ("endPath","closePath"):
-                _close(); vs_.clear(); ii_.clear(); oo_.clear()
-        _close(); cur_x+=adv*sc
+        try:
+            pen=DecomposingRecordingPen(gs); gs[gn].draw(pen)
+            vs_,ii_,oo_=[],[],[]
+            def _close():
+                if vs_:
+                    shapes.append({"ty":"sh","nm":"p","ks":{"a":0,"k":{"c":True,
+                        "v":[list(v) for v in vs_],"i":[list(v) for v in ii_],"o":[list(v) for v in oo_]}}})
+            for op,args in pen.value:
+                if op=="moveTo":
+                    _close(); vs_.clear(); ii_.clear(); oo_.clear()
+                    fx,fy=args[0]; lx=fx*sc+cur_x; ly=base_y-fy*sc
+                    vs_.append([lx,ly]); ii_.append([0.,0.]); oo_.append([0.,0.])
+                elif op=="lineTo":
+                    fx,fy=args[0]; lx=fx*sc+cur_x; ly=base_y-fy*sc
+                    vs_.append([lx,ly]); ii_.append([0.,0.]); oo_.append([0.,0.])
+                elif op=="curveTo":
+                    (c1x,c1y),(c2x,c2y),(ex,ey)=args
+                    pvx,pvy=vs_[-1]
+                    oo_[-1]=[c1x*sc+cur_x-pvx,base_y-c1y*sc-pvy]
+                    nvx=ex*sc+cur_x; nvy=base_y-ey*sc
+                    vs_.append([nvx,nvy]); ii_.append([c2x*sc+cur_x-nvx,base_y-c2y*sc-nvy]); oo_.append([0.,0.])
+                elif op=="qCurveTo":
+                    pts=list(args); p0x,p0y=vs_[-1]
+                    for qi in range(len(pts)-1):
+                        qcx,qcy=pts[qi]
+                        qex,qey=pts[qi+1] if qi==len(pts)-2 else ((pts[qi][0]+pts[qi+1][0])/2,(pts[qi][1]+pts[qi+1][1])/2)
+                        qcs=(qcx*sc+cur_x,base_y-qcy*sc); qes=(qex*sc+cur_x,base_y-qey*sc)
+                        c1s=(p0x+2/3*(qcs[0]-p0x),p0y+2/3*(qcs[1]-p0y))
+                        c2s=(qes[0]+2/3*(qcs[0]-qes[0]),qes[1]+2/3*(qcs[1]-qes[1]))
+                        oo_[-1]=[c1s[0]-p0x,c1s[1]-p0y]
+                        vs_.append(list(qes)); ii_.append([c2s[0]-qes[0],c2s[1]-qes[1]]); oo_.append([0.,0.])
+                        p0x,p0y=qes
+                elif op in ("endPath","closePath"):
+                    _close(); vs_.clear(); ii_.clear(); oo_.clear()
+            _close()
+        except Exception as e:
+            logger.warning(f"fontTools: failed to draw or decompose glyph {gn}: {e}")
+        cur_x+=adv*sc
     return shapes
 
 
