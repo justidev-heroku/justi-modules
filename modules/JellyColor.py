@@ -1,5 +1,5 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.7.4                      ║
+# ║                        🎨 JellyColor v4.7.5                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
 # ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
 # ║  v4.7.0: Интерактивная инлайн-статистика (.jstats) с пагинацией  ║
@@ -35,7 +35,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 7, 4)
+__version__ = (4, 7, 5)
 
 import asyncio
 import glob
@@ -174,7 +174,7 @@ TEMPLATE_PLACEHOLDER = "jelly"
 SESSION_TTL = 600
 CACHE_DIR = "/tmp/jelly_cache"
 MAX_TGS_SIZE = 63 * 1024
-RECOLOR_CONCURRENCY = 32
+RECOLOR_CONCURRENCY = 12
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
