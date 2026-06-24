@@ -1,5 +1,5 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.7.3                      ║
+# ║                        🎨 JellyColor v4.7.4                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
 # ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
 # ║  v4.7.0: Интерактивная инлайн-статистика (.jstats) с пагинацией  ║
@@ -35,7 +35,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 7, 3)
+__version__ = (4, 7, 4)
 
 import asyncio
 import glob
@@ -47,6 +47,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 import traceback
 import urllib.request
@@ -88,13 +89,23 @@ except ImportError:
 _FONT_BYTES_CACHE = {}
 
 
+_THREAD_LOCAL = threading.local()
+
+
 def _get_cached_font(font_path: str):
     data = _FONT_BYTES_CACHE.get(font_path)
     if data is None:
         with open(font_path, "rb") as f:
             data = f.read()
         _FONT_BYTES_CACHE[font_path] = data
-    return TTFont(io.BytesIO(data))
+    
+    if not hasattr(_THREAD_LOCAL, "fonts"):
+        _THREAD_LOCAL.fonts = {}
+    
+    font_key = (font_path, len(data))
+    if font_key not in _THREAD_LOCAL.fonts:
+        _THREAD_LOCAL.fonts[font_key] = TTFont(io.BytesIO(data))
+    return _THREAD_LOCAL.fonts[font_key]
 
 
 def json_loads(data: bytes) -> dict:
@@ -454,18 +465,31 @@ def _cache_key(doc) -> str:
 
 async def download_cached(client, doc) -> bytes:
     path = _cache_key(doc)
-    if os.path.exists(path):
-        try:
-            with open(path, "rb") as f:
-                return f.read()
-        except Exception as e:
-            logger.warning(f"Failed to read cache file {path}: {e}", exc_info=True)
+    
+    def _read_file():
+        if os.path.exists(path):
+            try:
+                with open(path, "rb") as f:
+                    return f.read()
+            except Exception as e:
+                logger.warning(f"Failed to read cache file {path}: {e}", exc_info=True)
+        return None
+
+    loop = asyncio.get_running_loop()
+    cached_data = await loop.run_in_executor(None, _read_file)
+    if cached_data is not None:
+        return cached_data
+
     data = await client.download_media(doc, bytes)
-    try:
-        with open(path, "wb") as f:
-            f.write(data)
-    except Exception as e:
-        logger.warning(f"Failed to write cache file {path}: {e}", exc_info=True)
+
+    def _write_file():
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+        except Exception as e:
+            logger.warning(f"Failed to write cache file {path}: {e}", exc_info=True)
+
+    await loop.run_in_executor(None, _write_file)
     return data
 
 
@@ -1863,24 +1887,32 @@ class JellyColorMod(loader.Module):
                     if orig_mime=="application/x-tgsticker":
                         buf=io.BytesIO(data); buf.name="sticker.tgs"
                     else:
-                        sz=100 if _is_emoji else 512
-                        img=Image.open(io.BytesIO(data)).convert("RGBA")
-                        if img.size != (sz, sz):
-                            img = img.resize((sz,sz),Image.LANCZOS)
-                        buf=io.BytesIO(); img.save(buf,format="WEBP",lossless=True)
-                        buf.seek(0); buf.name="sticker.webp"
+                        def _process_static():
+                            sz=100 if _is_emoji else 512
+                            img=Image.open(io.BytesIO(data)).convert("RGBA")
+                            if img.size != (sz, sz):
+                                img = img.resize((sz,sz),Image.LANCZOS)
+                            out_buf=io.BytesIO()
+                            img.save(out_buf,format="WEBP",lossless=True)
+                            return out_buf.getvalue()
+                        loop = asyncio.get_running_loop()
+                        img_data = await loop.run_in_executor(None, _process_static)
+                        buf=io.BytesIO(img_data); buf.name="sticker.webp"
                     buf.seek(0)
                 
                 # Save a copy to /tmp for debugging
-                try:
-                    for fpath in glob.glob("/tmp/jelly_debug_last.*"):
-                        os.remove(fpath)
-                    ext = "tgs" if buf.name.endswith(".tgs") else "webp"
-                    with open(f"/tmp/jelly_debug_last.{ext}", "wb") as f:
-                        f.write(buf.getvalue())
-                    buf.seek(0)
-                except Exception:
-                    pass
+                def _write_debug(buf_val, bname):
+                    try:
+                        for fpath in glob.glob("/tmp/jelly_debug_last.*"):
+                            os.remove(fpath)
+                        ext = "tgs" if bname.endswith(".tgs") else "webp"
+                        with open(f"/tmp/jelly_debug_last.{ext}", "wb") as f:
+                            f.write(buf_val)
+                    except Exception:
+                        pass
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, _write_debug, buf.getvalue(), buf.name)
+                buf.seek(0)
 
                 es="🎨"
                 for a in doc.attributes:
@@ -1952,15 +1984,18 @@ class JellyColorMod(loader.Module):
             buf=await recolor_document(self._client,td,hc,is_emoji=is_emoji)
             
             # Save a copy to /tmp for debugging
-            try:
-                for fpath in glob.glob("/tmp/jelly_debug_last.*"):
-                    os.remove(fpath)
-                ext = "tgs" if buf.name.endswith(".tgs") else "webp"
-                with open(f"/tmp/jelly_debug_last.{ext}", "wb") as f:
-                    f.write(buf.getvalue())
-                buf.seek(0)
-            except Exception:
-                pass
+            def _write_debug(buf_val, bname):
+                try:
+                    for fpath in glob.glob("/tmp/jelly_debug_last.*"):
+                        os.remove(fpath)
+                    ext = "tgs" if bname.endswith(".tgs") else "webp"
+                    with open(f"/tmp/jelly_debug_last.{ext}", "wb") as f:
+                        f.write(buf_val)
+                except Exception:
+                    pass
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _write_debug, buf.getvalue(), buf.name)
+            buf.seek(0)
 
             me=await self._client.get_me(); mee=await self._client.get_input_entity("me")
             orig_mime=getattr(td,"mime_type","image/webp")
