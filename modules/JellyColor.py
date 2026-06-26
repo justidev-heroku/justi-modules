@@ -1,5 +1,5 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.7.7                      ║
+# ║                        🎨 JellyColor v4.7.8                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
 # ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
 # ║  v4.7.0: Интерактивная инлайн-статистика (.jstats) с пагинацией  ║
@@ -35,7 +35,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 7, 7)
+__version__ = (4, 7, 8)
 
 import asyncio
 import glob
@@ -176,7 +176,7 @@ SESSION_TTL = 600
 CACHE_DIR = "/tmp/jelly_cache"
 MAX_TGS_SIZE = 63 * 1024
 RECOLOR_CONCURRENCY = 10   # CPU-bound recolor/download (cached) — safe to run wide
-TG_WRITE_INTERVAL = 0.6    # min seconds between Telegram write ops (account-wide rate limit)
+TG_WRITE_INTERVAL = 0.9    # min seconds between Telegram write ops (account-wide rate limit)
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
