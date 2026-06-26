@@ -174,7 +174,8 @@ TEMPLATE_PLACEHOLDER = "jelly"
 SESSION_TTL = 600
 CACHE_DIR = "/tmp/jelly_cache"
 MAX_TGS_SIZE = 63 * 1024
-RECOLOR_CONCURRENCY = 4
+RECOLOR_CONCURRENCY = 10   # CPU-bound recolor/download (cached) — safe to run wide
+UPLOAD_CONCURRENCY = 3     # Telegram write calls (upload_file + UploadMediaRequest) — anti-flood gate
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -1478,11 +1479,19 @@ class JellyColorMod(loader.Module):
         self._sessions:     Dict[int,Dict[str,Any]] = {}
         self._tsessions:    Dict[int,Dict[str,Any]] = {}
         self._semaphore = None
+        self._upload_semaphore = None
 
     def _sem(self):
         if self._semaphore is None:
             self._semaphore=asyncio.Semaphore(RECOLOR_CONCURRENCY)
         return self._semaphore
+
+    def _upload_sem(self):
+        # Narrow gate only around Telegram write calls, so CPU recolor can run
+        # wide (RECOLOR_CONCURRENCY) while uploads stay under the anti-flood limit.
+        if self._upload_semaphore is None:
+            self._upload_semaphore=asyncio.Semaphore(UPLOAD_CONCURRENCY)
+        return self._upload_semaphore
 
     def _expire(self):
         now=time.time()
@@ -1900,26 +1909,29 @@ class JellyColorMod(loader.Module):
                         buf=io.BytesIO(img_data); buf.name="sticker.webp"
                     buf.seek(0)
                 
-                # Save a copy to /tmp for debugging
-                def _write_debug(buf_val, bname):
-                    try:
-                        for fpath in glob.glob("/tmp/jelly_debug_last.*"):
-                            os.remove(fpath)
-                        ext = "tgs" if bname.endswith(".tgs") else "webp"
-                        with open(f"/tmp/jelly_debug_last.{ext}", "wb") as f:
-                            f.write(buf_val)
-                    except Exception:
-                        pass
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, _write_debug, buf.getvalue(), buf.name)
-                buf.seek(0)
+                # Debug dump only for single-item ops; in batch it's a race + pure overhead.
+                if len(docs) == 1:
+                    def _write_debug(buf_val, bname):
+                        try:
+                            for fpath in glob.glob("/tmp/jelly_debug_last.*"):
+                                os.remove(fpath)
+                            ext = "tgs" if bname.endswith(".tgs") else "webp"
+                            with open(f"/tmp/jelly_debug_last.{ext}", "wb") as f:
+                                f.write(buf_val)
+                        except Exception:
+                            pass
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, _write_debug, buf.getvalue(), buf.name)
+                    buf.seek(0)
 
                 es="🎨"
                 for a in doc.attributes:
                     if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
                         es=getattr(a,"alt",None) or "🎨"; break
-                up=await self._client.upload_file(buf,file_name=buf.name)
-                return await _upload_item(self._client,mee,up,mime,es,ptype=="emoji")
+                # Narrow anti-flood gate: only the Telegram write path is serialized.
+                async with self._upload_sem():
+                    up=await self._client.upload_file(buf,file_name=buf.name)
+                    return await _upload_item(self._client,mee,up,mime,es,ptype=="emoji")
             ordered=await self._parallel(docs,_fn,"Перекраска",call,reply_markup=self._j_markup(uid))
             if not ordered: raise ValueError("Нет стикеров")
             clabel=color or "без перекраски"
@@ -2473,8 +2485,10 @@ class JellyColorMod(loader.Module):
                 for a in doc.attributes:
                     if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
                         es=getattr(a,"alt",None) or "✨"; break
-                up=await self._client.upload_file(buf,file_name=buf.name)
-                return await _upload_item(self._client,mee,up,mime,es,True)
+                # Narrow anti-flood gate: only the Telegram write path is serialized.
+                async with self._upload_sem():
+                    up=await self._client.upload_file(buf,file_name=buf.name)
+                    return await _upload_item(self._client,mee,up,mime,es,True)
             ordered=await self._parallel(docs,_fn,"Создаём",call,reply_markup=self._jt_markup(uid))
             if not ordered:
                 await call.edit(text=pe("❌",PE["err"])+" Ни один эмодзи не обработан.", reply_markup=self._jt_markup(uid))
