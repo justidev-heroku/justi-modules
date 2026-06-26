@@ -1,5 +1,5 @@
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                        🎨 JellyColor v4.7.6                      ║
+# ║                        🎨 JellyColor v4.7.7                      ║
 # ║           Перекраска стикеров/эмодзи + текстовые шаблоны         ║
 # ║  v4.6.2: Фикс краша на битых шрифтах + валидация в .jaddfont     ║
 # ║  v4.7.0: Интерактивная инлайн-статистика (.jstats) с пагинацией  ║
@@ -35,7 +35,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 7, 6)
+__version__ = (4, 7, 7)
 
 import asyncio
 import glob
@@ -46,6 +46,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import threading
 import time
@@ -175,7 +176,7 @@ SESSION_TTL = 600
 CACHE_DIR = "/tmp/jelly_cache"
 MAX_TGS_SIZE = 63 * 1024
 RECOLOR_CONCURRENCY = 10   # CPU-bound recolor/download (cached) — safe to run wide
-UPLOAD_CONCURRENCY = 3     # Telegram write calls (upload_file + UploadMediaRequest) — anti-flood gate
+TG_WRITE_INTERVAL = 0.6    # min seconds between Telegram write ops (account-wide rate limit)
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -1479,19 +1480,39 @@ class JellyColorMod(loader.Module):
         self._sessions:     Dict[int,Dict[str,Any]] = {}
         self._tsessions:    Dict[int,Dict[str,Any]] = {}
         self._semaphore = None
-        self._upload_semaphore = None
+        self._write_gate = None      # serializes write pacing
+        self._next_write_at = 0.0    # monotonic time the next write may start
+        self._flood_until = 0.0      # shared cooldown: all writers wait past this
 
     def _sem(self):
         if self._semaphore is None:
             self._semaphore=asyncio.Semaphore(RECOLOR_CONCURRENCY)
         return self._semaphore
 
-    def _upload_sem(self):
-        # Narrow gate only around Telegram write calls, so CPU recolor can run
-        # wide (RECOLOR_CONCURRENCY) while uploads stay under the anti-flood limit.
-        if self._upload_semaphore is None:
-            self._upload_semaphore=asyncio.Semaphore(UPLOAD_CONCURRENCY)
-        return self._upload_semaphore
+    async def _throttle_write(self):
+        """Account-wide pacing for Telegram write calls.
+
+        FloodWait is account-global, so concurrency limits don't help — only the
+        request *rate* matters. This serializes writes TG_WRITE_INTERVAL apart and
+        honours any active shared flood cooldown (_flood_until). CPU-bound recolor
+        still runs wide via RECOLOR_CONCURRENCY; only the Telegram write is paced.
+        """
+        loop = asyncio.get_event_loop()
+        if self._write_gate is None:
+            self._write_gate = asyncio.Lock()
+        async with self._write_gate:
+            now = loop.time()
+            target = max(now, self._next_write_at, self._flood_until)
+            delay = target - now
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self._next_write_at = max(loop.time(), target) + TG_WRITE_INTERVAL
+
+    def _note_flood(self, wait):
+        """Publish a shared cooldown so every pending writer backs off together
+        instead of charging in and escalating the penalty (thundering herd)."""
+        loop = asyncio.get_event_loop()
+        self._flood_until = max(self._flood_until, loop.time() + wait)
 
     def _expire(self):
         now=time.time()
@@ -1602,21 +1623,33 @@ class JellyColorMod(loader.Module):
         async def _run(i,doc):
             retries=3
             item=None
-            for attempt in range(retries):
+            attempt=0
+            flood_hits=0
+            while True:
                 try:
                     async with sem:
                         item=await fn(i,doc)
                     break
                 except FloodWaitError as e:
-                    wait = getattr(e, "seconds", None) or 5 * (attempt + 1)
+                    # Backpressure, not a failure: don't consume the retry budget.
+                    # Publish a shared cooldown so all writers pause together, and
+                    # add jitter so they don't all retry at the same instant.
+                    wait = getattr(e, "seconds", None) or 30
+                    self._note_flood(wait)
+                    flood_hits+=1
                     log.warning(f"_parallel FloodWait item {i}, sleeping {wait}s")
-                    await asyncio.sleep(wait)
+                    await asyncio.sleep(wait + random.uniform(0.5, 3.0))
+                    if flood_hits>=8:
+                        log.error(f"_parallel item {i} gave up after {flood_hits} FloodWaits")
+                        break
                 except Exception as e:
-                    if attempt<retries-1:
-                        log.warning(f"_parallel item {i} attempt {attempt+1} failed: {e}")
+                    attempt+=1
+                    if attempt<retries:
+                        log.warning(f"_parallel item {i} attempt {attempt} failed: {e}")
                         await asyncio.sleep(1)
                     else:
                         log.error(f"_parallel item {i} failed after {retries} attempts: {e}")
+                        break
             async with lock:
                 if item is not None:
                     results.append((i,item))
@@ -1928,10 +1961,10 @@ class JellyColorMod(loader.Module):
                 for a in doc.attributes:
                     if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
                         es=getattr(a,"alt",None) or "🎨"; break
-                # Narrow anti-flood gate: only the Telegram write path is serialized.
-                async with self._upload_sem():
-                    up=await self._client.upload_file(buf,file_name=buf.name)
-                    return await _upload_item(self._client,mee,up,mime,es,ptype=="emoji")
+                # Account-wide rate limit: pace Telegram writes to avoid FloodWait.
+                await self._throttle_write()
+                up=await self._client.upload_file(buf,file_name=buf.name)
+                return await _upload_item(self._client,mee,up,mime,es,ptype=="emoji")
             ordered=await self._parallel(docs,_fn,"Перекраска",call,reply_markup=self._j_markup(uid))
             if not ordered: raise ValueError("Нет стикеров")
             clabel=color or "без перекраски"
@@ -2485,10 +2518,10 @@ class JellyColorMod(loader.Module):
                 for a in doc.attributes:
                     if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
                         es=getattr(a,"alt",None) or "✨"; break
-                # Narrow anti-flood gate: only the Telegram write path is serialized.
-                async with self._upload_sem():
-                    up=await self._client.upload_file(buf,file_name=buf.name)
-                    return await _upload_item(self._client,mee,up,mime,es,True)
+                # Account-wide rate limit: pace Telegram writes to avoid FloodWait.
+                await self._throttle_write()
+                up=await self._client.upload_file(buf,file_name=buf.name)
+                return await _upload_item(self._client,mee,up,mime,es,True)
             ordered=await self._parallel(docs,_fn,"Создаём",call,reply_markup=self._jt_markup(uid))
             if not ordered:
                 await call.edit(text=pe("❌",PE["err"])+" Ни один эмодзи не обработан.", reply_markup=self._jt_markup(uid))
