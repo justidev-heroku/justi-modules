@@ -33,13 +33,14 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 
 ## Key Features
 
-- **Claudgramik Mascot** — A cute custom unicode character (based on Anthropic's logo) welcomes you during setup.
-- **Dynamic ANSI Gradient Banners** — Beautiful startup graphics with terracotta-white-red transitions that dynamically adapt to your terminal window size.
-- **Automated Git Updates** — Periodically runs `git fetch`, merges changes safely (`git reset --hard`), sends a pretty Telegram notification with the changelog, and reboots.
-- **Orphan Session Guard** — Native `SIGTERM`/`SIGINT` wrapper interceptors and `control-group` service kills prevent background PTY processes from locking sessions.
-- **Multi-Profile Control** — Built-in Telegram commands to list, switch, login, backup, or delete active email credentials.
-- **Model & Effort Switching** — Change active models (Sonnet, Opus, Haiku) and reasoning effort levels (low, medium, high) directly using inline keyboards.
-- **HTML Formatting** — Incoming and outgoing messages retain all Telegram formatting (bold, italics, code blocks, quote blocks).
+- **Claudgramik Mascot** – A cute pixel-art mascot welcomes you during setup.
+- **Gradient Banners** – Beautiful startup graphics that dynamically adapt to your terminal width.
+- **Auto-updates from Git** – The bot checks for updates every 15 minutes, automatically pulls them, and sends a changelog directly to Telegram.
+- **Anti-hang Protection** – Built-in signal handling stops background PTY tasks clean, preventing crashes during service reboots.
+- **Multi-account Manager** – Easily log in, backup, and switch between profile credentials straight from the chat.
+- **Model & Effort Selectors** – Switch models (Sonnet/Opus/Haiku) and reasoning depths (Effort) using quick Telegram buttons.
+- **HTML Message Rendering** – Keeps all native Telegram formatting (bold, italics, quotes, and code blocks) intact.
+
 
 ---
 
