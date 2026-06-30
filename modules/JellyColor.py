@@ -7,6 +7,9 @@
 # ║  v4.7.2: Фикс потокобезопасности fontTools при генерации         ║
 # ╚══════════════════════════════════════════════════════════════════╝
 #
+# Based on JellyColor v2 by @oblivion64
+# https://github.com/olegcoffiau-source/jellycolor-v2-hikka
+#
 # MIT License
 #
 # Copyright (c) 2026 justidev
