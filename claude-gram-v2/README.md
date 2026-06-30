@@ -1,96 +1,97 @@
-# Claude-Gram v2
+# Claude-Gram v2 — EN
+
+[![Telegram](https://img.shields.io/badge/Telegram-@justidev-2CA5E0?logo=telegram&logoColor=white)](https://t.me/justidev)
+
+![Claude-Gram v2 Banner](https://raw.githubusercontent.com/justidev-heroku/justi-modules/main/assets/claude_gram_v2.jpg)
+
+**Claude-Gram v2** is a premium self-hosted Telegram channel bridge for [Claude Code](https://claude.ai/code) and Antigravity CLI (`agy`). It enables you to send and receive text, formatted code, files, logs, and photos directly from your AI agent context.
 
 > [!NOTE]
-> This project is a fork of the original [claude-gram by @ripcats](https://github.com/ripcats/ripcats-marketplace/tree/main/claude-gram), created and maintained by [@justidev](https://t.me/justidev).
+> This project is a fork of the original [claude-gram by @ripcats](https://github.com/ripcats/ripcats-marketplace/tree/main/claude-gram).
 
-**Claude-Gram v2** is a premium self-hosted Telegram channel bridge for [Claude Code](https://claude.ai/code) and Antigravity CLI (`agy`). It enables you to send and receive text, formatted code, files, logs, and photos directly from your AI agent. Running as an MCP (Model Context Protocol) server over stdio, it uses `aiogram 3` and includes advanced interactive management, multi-profile handling, and automatic daemon installation.
-
----
-
-## 🌟 Key Features
-
-* **Proportional Sprite Mascot** – A cute pixel-art sprite of **Claudgramik** (inspired by the official Anthropic mascot) welcomes you during setup.
-* **Responsive ANSI Gradient Banners** – Beautiful startup graphics with horizontal terracotta-white-red color transitions that dynamically adapt to your terminal window size.
-* **Interactive Cross-Platform Installer** (`install.sh` / `install.ps1`) – Configures dependencies (`playwright`, `curl_cffi`, system libraries) and registers background services under Linux (`systemd`), macOS (`launchd`), Windows (`Task Scheduler`/Startup), or generic `PM2`/`nohup`.
-* **Automated Git Updates** – Periodically checks for new commits, resets code safely, sends a pretty Telegram notification with the changelog (list of new commits), and reboots.
-* **Orphan Session Guard** – Robust `SIGTERM`/`SIGINT` wrapper interceptors and `control-group` service kills prevent background PTY processes from locking session files.
-* **Multi-Profile Control** – Full Telegram command suite to list (`/accounts`), switch (`/switch_account`), log in (`/login`), backup (`/save_account`), or remove (`/delete_account`) credentials.
-* **Model & Effort Switching** – Dynamically change models (`/model`) and reasoning effort levels (`/effort`) using native inline Telegram keyboards.
-* **HTML Formatting** – Retains all Telegram typography (bold, italics, code blocks, quote blocks) and displays thinking processes beautifully.
+Current version: **v2.0.0**.
 
 ---
 
-## ⚙️ Requirements
+## Installation
 
-* Python 3.10+
-* `aiogram >= 3.28`, `orjson`, `curl_cffi`, `playwright`
-* A Telegram bot token from [@BotFather](https://t.me/BotFather)
+To automatically install the bot and register background services, run the interactive helper:
 
----
-
-## 🚀 Installation
-
-### 1. Automatic Install
-
-Simply clone this directory and run the helper script:
-
-#### Linux / macOS:
+### Linux / macOS:
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-#### Windows (Run PowerShell as Admin):
+### Windows (Run PowerShell as Admin):
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\install.ps1
 ```
 
-The installer will guide you through entering your Telegram Bot Token and Owner Telegram ID, download python dependencies, and setup the background auto-starting service.
+---
+
+## Key Features
+
+- **Claudgramik Mascot** — A cute custom unicode character (based on Anthropic's logo) welcomes you during setup.
+- **Dynamic ANSI Gradient Banners** — Beautiful startup graphics with terracotta-white-red transitions that dynamically adapt to your terminal window size.
+- **Automated Git Updates** — Periodically runs `git fetch`, merges changes safely (`git reset --hard`), sends a pretty Telegram notification with the changelog, and reboots.
+- **Orphan Session Guard** — Native `SIGTERM`/`SIGINT` wrapper interceptors and `control-group` service kills prevent background PTY processes from locking sessions.
+- **Multi-Profile Control** — Built-in Telegram commands to list, switch, login, backup, or delete active email credentials.
+- **Model & Effort Switching** — Change active models (Sonnet, Opus, Haiku) and reasoning effort levels (low, medium, high) directly using inline keyboards.
+- **HTML Formatting** — Incoming and outgoing messages retain all Telegram formatting (bold, italics, code blocks, quote blocks).
 
 ---
 
-## 🤖 Bot Commands
+## Bot Commands
 
 | Command | Description |
 |---|---|
-| `/start` | Welcome message and initial authorization check. |
-| `/accounts` | Display all saved profiles and the active account. |
-| `/login <name>` | Start interactive OAuth login flow for a new profile. |
-| `/save_account` | Backup the currently active profile credentials. |
-| `/switch_account <name>` | Switch active email account profile and restart the bot. |
-| `/delete_account <name>` | Permanently delete a profile credentials. |
-| `/model` | Switch the Claude model (Sonnet, Opus, Haiku) using inline buttons. |
-| `/effort` | Adjust the model's reasoning effort level (low, medium, high). |
-| `/usage` | View detailed token limit statistics and billing state. |
-| `/resume` | Select and resume any previous Claude Code session. |
-| `/auto` | Toggle auto-permission confirmation. |
-| `/close` | Terminate the active session, clear workspace logs, and close the thread. |
+| `/start` | Welcome message and initial owner authorization check |
+| `/accounts` | Display all saved profiles and the active account |
+| `/login <name>` | Start interactive OAuth login flow for a new profile |
+| `/save_account` | Backup the currently active profile credentials |
+| `/switch_account <name>` | Switch active email account profile and restart the bot |
+| `/delete_account <name>` | Permanently delete a profile credentials from the server |
+| `/model` | Switch the Claude model (Sonnet, Opus, Haiku) using inline buttons |
+| `/effort` | Adjust the model's reasoning effort level (low, medium, high) |
+| `/usage` | View detailed token limit statistics and billing state |
+| `/resume` | Select and resume any previous Claude Code session |
+| `/auto` | Toggle auto-permission confirmation |
+| `/close` | Terminate the active session, clear workspace logs, and close the thread |
 
 ---
 
-## 🛠️ Agent Tools (MCP server)
-
-These tools are exposed to the Claude Code agent session:
+## Agent Tools (MCP server)
 
 | Tool | Description |
 |---|---|
-| `reply` | Send a text reply to Telegram chat (HTML formatted). |
-| `reply_file` / `send_file_to_tg` | Send files, logs, photos or documents. |
-| `reactions` | Add reactions (`👍`, `🔥`, `👀`, etc.) based on message mood. |
-| `rename_thread` | Rename the current session topic (forum thread). |
-| `edit_message` | Edit a previously sent text message. |
-| `get_history` | Retrieve local logs of the active thread history. |
+| `reply` | Send a text reply to Telegram chat (HTML formatted) |
+| `reply_file` | Send files, logs, photos or documents |
+| `reactions` | Add reactions (`👍`, `🔥`, `👀`, etc.) based on message mood |
+| `rename_thread` | Rename the current session topic (forum thread) |
+| `edit_message` | Edit a previously sent text message |
+| `get_history` | Retrieve local logs of the active thread history |
 
 ---
 
-## 👤 Authors
+## Configuration (access.json)
 
-* **Fork Author**: [@justidev](https://t.me/justidev)
-* **Original Author**: [@ripcats](https://github.com/ripcats)
+| Parameter | Description |
+|---|---|
+| `allowFrom` | List of allowed Telegram IDs |
+| `ackReaction` | Default emoji reaction to incoming user messages |
+| `tz` | Timezone for forum threads (e.g. `Europe/Moscow`) |
+| `threads` | Toggle forum thread mode (`true`/`false`) |
 
 ---
 
-## 📄 License
+## Language Switching
 
-This project is licensed under the MIT License.
+- [Russian docs](README.RU.md)
+
+---
+
+## License
+
+MIT · [@justidev](https://t.me/justidev)
