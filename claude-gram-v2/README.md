@@ -1,21 +1,21 @@
-# Claude-Gram v2 — EN
+# Claude-Gram v2 — RU
 
 [![Telegram](https://img.shields.io/badge/Telegram-@justidev-2CA5E0?logo=telegram&logoColor=white)](https://t.me/justidev)
 
 ![Claude-Gram v2 Banner](https://raw.githubusercontent.com/justidev-heroku/justi-modules/main/assets/claude_gram_v2.jpg)
 
-**Claude-Gram v2** is a premium self-hosted Telegram channel bridge for [Claude Code](https://claude.ai/code) and Antigravity CLI (`agy`). It enables you to send and receive text, formatted code, files, logs, and photos directly from your AI agent context.
+**Claude-Gram v2** — премиальный хостинг-мост Telegram-канала для [Claude Code](https://claude.ai/code) и Antigravity CLI (`agy`), позволяющий отправлять и получать тексты, форматированный код, файлы, логи и фотографии прямо из контекста ИИ-агента.
 
 > [!NOTE]
-> This project is a fork of the original [claude-gram by @ripcats](https://github.com/ripcats/ripcats-marketplace/tree/main/claude-gram).
+> Этот проект является форком оригинального репозитория [claude-gram от @ripcats](https://github.com/ripcats/ripcats-marketplace/tree/main/claude-gram).
 
-Current version: **v2.0.0**.
+Актуальная версия: **v2.0.0**.
 
 ---
 
-## Installation
+## Установка
 
-To automatically install the bot and register background services, run the interactive helper:
+Для автоматической установки и настройки фоновой службы запустите интерактивный установщик:
 
 ### Linux / macOS:
 ```bash
@@ -23,7 +23,7 @@ chmod +x install.sh
 ./install.sh
 ```
 
-### Windows (Run PowerShell as Admin):
+### Windows (Запустите PowerShell от Администратора):
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\install.ps1
@@ -31,67 +31,67 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 
 ---
 
-## Key Features
+## Основные возможности
 
-- **Claudgramik Mascot** — A cute custom unicode character (based on Anthropic's logo) welcomes you during setup.
-- **Dynamic ANSI Gradient Banners** — Beautiful startup graphics with terracotta-white-red transitions that dynamically adapt to your terminal window size.
-- **Automated Git Updates** — Periodically runs `git fetch`, merges changes safely (`git reset --hard`), sends a pretty Telegram notification with the changelog, and reboots.
-- **Orphan Session Guard** — Native `SIGTERM`/`SIGINT` wrapper interceptors and `control-group` service kills prevent background PTY processes from locking sessions.
-- **Multi-Profile Control** — Built-in Telegram commands to list, switch, login, backup, or delete active email credentials.
-- **Model & Effort Switching** — Change active models (Sonnet, Opus, Haiku) and reasoning effort levels (low, medium, high) directly using inline keyboards.
-- **HTML Formatting** — Incoming and outgoing messages retain all Telegram formatting (bold, italics, code blocks, quote blocks).
+- **Пиксельный маскот «Клодграмик»** — уникальный персонаж из символов Юникода приветствует вас при установке.
+- **Адаптивные градиентные баннеры** — красивое приветствие с 24-битным горизонтальным переходом цветов, подстраивающееся под ширину окна вашего терминала.
+- **Автоматические обновления из Git** — бот раз в 15 минут делает `git fetch`, проверяет репозиторий, безопасно подтягивает изменения (`git reset --hard`) и присылает красивое уведомление со списком изменений (changelog).
+- **Защита от утечки сессий (PTY)** — встроенные обработчики сигналов `SIGTERM`/`SIGINT` и режим `control-group` гарантируют завершение фонового процесса `claude` при перезапусках.
+- **Управление несколькими аккаунтами** — команды переключения, бэкапа и авторизации новых профилей прямо через Telegram.
+- **Смена моделей и Effort** — переключение моделей (Sonnet, Opus, Haiku) и уровней рассуждений (low, medium, high) кнопками инлайн-клавиатуры.
+- **Сохранение разметки HTML** — входящий и исходящий текст сохраняет стили Telegram (жирный, курсив, цитаты, код).
 
 ---
 
-## Bot Commands
+## Команды бота
 
-| Command | Description |
+| Команда | Описание |
 |---|---|
-| `/start` | Welcome message and initial owner authorization check |
-| `/accounts` | Display all saved profiles and the active account |
-| `/login <name>` | Start interactive OAuth login flow for a new profile |
-| `/save_account` | Backup the currently active profile credentials |
-| `/switch_account <name>` | Switch active email account profile and restart the bot |
-| `/delete_account <name>` | Permanently delete a profile credentials from the server |
-| `/model` | Switch the Claude model (Sonnet, Opus, Haiku) using inline buttons |
-| `/effort` | Adjust the model's reasoning effort level (low, medium, high) |
-| `/usage` | View detailed token limit statistics and billing state |
-| `/resume` | Select and resume any previous Claude Code session |
-| `/auto` | Toggle auto-permission confirmation |
-| `/close` | Terminate the active session, clear workspace logs, and close the thread |
+| `/start` | Приветствие и первичная привязка Telegram ID владельца |
+| `/accounts` | Список всех сохраненных профилей и отметка активного |
+| `/login <имя>` | Запуск интерактивной OAuth-авторизации нового профиля |
+| `/save_account` | Резервное копирование учетных данных активного профиля |
+| `/switch_account <имя>` | Переключение на другой сохраненный профиль с перезапуском |
+| `/delete_account <имя>` | Полное удаление файла профиля с сервера |
+| `/model` | Быстрая смена модели кнопками инлайн-клавиатуры |
+| `/effort` | Смена уровня рассуждений (low, medium, high) |
+| `/usage` | Красивая статистика лимитов использования API и счетов |
+| `/resume` | Выбор и возобновление любой из прошлых сессий Claude Code |
+| `/auto` | Включение/выключение автоматического подтверждения прав |
+| `/close` | Завершение сессии, очистка логов и закрытие форум-топика |
 
 ---
 
-## Agent Tools (MCP server)
+## Инструменты агента (MCP-сервер)
 
-| Tool | Description |
+| Инструмент | Описание |
 |---|---|
-| `reply` | Send a text reply to Telegram chat (HTML formatted) |
-| `reply_file` | Send files, logs, photos or documents |
-| `reactions` | Add reactions (`👍`, `🔥`, `👀`, etc.) based on message mood |
-| `rename_thread` | Rename the current session topic (forum thread) |
-| `edit_message` | Edit a previously sent text message |
-| `get_history` | Retrieve local logs of the active thread history |
+| `reply` | Отправить текстовый ответ в Telegram (HTML разметка) |
+| `reply_file` | Отправить один файл или альбом (логи, скрипты, фото) |
+| `reactions` | Автоматическая/ручная emoji-реакция на сообщения |
+| `rename_thread` | Переименование форум-топика текущей сессии |
+| `edit_message` | Изменение ранее отправленного ботом сообщения |
+| `get_history` | Получение локальной истории активного треда |
 
 ---
 
-## Configuration (access.json)
+## Конфигурация (access.json)
 
-| Parameter | Description |
+| Параметр | Описание |
 |---|---|
-| `allowFrom` | List of allowed Telegram IDs |
-| `ackReaction` | Default emoji reaction to incoming user messages |
-| `tz` | Timezone for forum threads (e.g. `Europe/Moscow`) |
-| `threads` | Toggle forum thread mode (`true`/`false`) |
+| `allowFrom` | Список разрешенных Telegram ID |
+| `ackReaction` | Дефолтная emoji-реакция на входящие сообщения |
+| `tz` | Часовой пояс для форум-топиков (например `Europe/Moscow`) |
+| `threads` | Флаг включения/отключения форум-топиков (`true`/`false`) |
 
 ---
 
-## Language Switching
+## Переключение языка
 
-- [Russian docs](README.RU.md)
+- [English docs](README.EN.md)
 
 ---
 
-## License
+## Лицензия
 
 MIT · [@justidev](https://t.me/justidev)
