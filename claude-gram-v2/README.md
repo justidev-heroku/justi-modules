@@ -15,15 +15,23 @@
 
 ## Установка
 
-Для автоматической установки и настройки фоновой службы запустите интерактивный установщик:
+### 1. Клонирование репозитория
+Склонируйте репозиторий с модулями и перейдите в папку проекта:
+```bash
+git clone https://github.com/justidev-heroku/justi-modules.git
+cd justi-modules/claude-gram-v2
+```
 
-### Linux / macOS:
+### 2. Запуск установщика
+Скрипт автоматически проверит Python, установит необходимые зависимости (включая `aiogram`, `playwright`, `curl_cffi`) и настроит фоновую службу автозапуска.
+
+#### Linux / macOS:
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-### Windows (Запустите PowerShell от Администратора):
+#### Windows (запустите PowerShell от Администратора):
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\install.ps1

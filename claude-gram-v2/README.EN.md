@@ -15,15 +15,23 @@ Current version: **v2.0.0**.
 
 ## Installation
 
-To automatically install the bot and register background services, run the interactive helper:
+### 1. Clone the repository
+Clone the modules repository and navigate to the project directory:
+```bash
+git clone https://github.com/justidev-heroku/justi-modules.git
+cd justi-modules/claude-gram-v2
+```
 
-### Linux / macOS:
+### 2. Run the installer
+The helper script will automatically verify Python, install all required dependencies (including `aiogram`, `playwright`, `curl_cffi`), and set up the background daemon auto-start.
+
+#### Linux / macOS:
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-### Windows (Run PowerShell as Admin):
+#### Windows (Run PowerShell as Admin):
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\install.ps1
