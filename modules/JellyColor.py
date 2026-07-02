@@ -180,6 +180,7 @@ CACHE_DIR = "/tmp/jelly_cache"
 MAX_TGS_SIZE = 63 * 1024
 RECOLOR_CONCURRENCY = 10   # CPU-bound recolor/download (cached) — safe to run wide
 TG_WRITE_INTERVAL = 0.9    # min seconds between Telegram write ops (account-wide rate limit)
+STICKER_CREATE_INTERVAL = 31.5  # min seconds between AddStickerToSet/CreateStickerSet (TG limit: 8/4min10s)
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -1420,7 +1421,7 @@ def _get_bot_suffix(me):
     return str(me.id)
 
 
-async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, exists_mode="recreate"):
+async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, exists_mode="recreate", throttle_fn=None):
     limit = 180 if is_emoji else 120
     chunks = [stickers[i:i + limit] for i in range(0, len(stickers), limit)]
     created_names = []
@@ -1429,8 +1430,10 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
         n = idx + 1
         curr_short = _get_partition_short_name(short_name, n)
         curr_title = title if n == 1 else f"{title} v{n}"
-        
+
         try:
+            if throttle_fn:
+                await throttle_fn()
             await client(functions.stickers.CreateStickerSetRequest(
                 user_id=uid, title=curr_title, short_name=curr_short, stickers=chunk, emojis=is_emoji,
             ))
@@ -1444,6 +1447,8 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
                             stickerset=types.InputStickerSetShortName(short_name=curr_short)
                         ))
                         await asyncio.sleep(0.5)
+                        if throttle_fn:
+                            await throttle_fn()
                         await client(functions.stickers.CreateStickerSetRequest(
                             user_id=uid, title=curr_title, short_name=curr_short, stickers=chunk, emojis=is_emoji,
                         ))
@@ -1454,11 +1459,12 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
                 else:
                     try:
                         for s in chunk:
+                            if throttle_fn:
+                                await throttle_fn()
                             await client(functions.stickers.AddStickerToSetRequest(
                                 stickerset=types.InputStickerSetShortName(short_name=curr_short),
                                 sticker=s
                             ))
-                            await asyncio.sleep(0.2)
                         created_names.append(curr_short)
                     except Exception as add_err:
                         logger.exception(f"Failed to append stickers to existing stickerpack {curr_short}")
@@ -1466,7 +1472,7 @@ async def _safe_create_set(client, uid, title, short_name, stickers, is_emoji, e
             else:
                 logger.exception(f"CreateStickerSetRequest failed for {curr_short}")
                 return None, str(e)
-                
+
     return created_names, None
 
 
@@ -1480,12 +1486,15 @@ class JellyColorMod(loader.Module):
     strings = {"name": "JellyColor"}
 
     def __init__(self):
-        self._sessions:     Dict[int,Dict[str,Any]] = {}
-        self._tsessions:    Dict[int,Dict[str,Any]] = {}
+        self._sessions:      Dict[int,Dict[str,Any]] = {}
+        self._tsessions:     Dict[int,Dict[str,Any]] = {}
+        self._stats_sessions: Dict[int,Dict[str,Any]] = {}
         self._semaphore = None
         self._write_gate = None      # serializes write pacing
         self._next_write_at = 0.0    # monotonic time the next write may start
         self._flood_until = 0.0      # shared cooldown: all writers wait past this
+        self._create_gate = None     # serializes sticker-set creation (8 ops / 4m10s TG limit)
+        self._next_create_at = 0.0
 
     def _sem(self):
         if self._semaphore is None:
@@ -1500,7 +1509,7 @@ class JellyColorMod(loader.Module):
         honours any active shared flood cooldown (_flood_until). CPU-bound recolor
         still runs wide via RECOLOR_CONCURRENCY; only the Telegram write is paced.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         if self._write_gate is None:
             self._write_gate = asyncio.Lock()
         async with self._write_gate:
@@ -1511,10 +1520,22 @@ class JellyColorMod(loader.Module):
                 await asyncio.sleep(delay)
             self._next_write_at = max(loop.time(), target) + TG_WRITE_INTERVAL
 
+    async def _throttle_create(self):
+        """Pace sticker-set creation calls: TG allows 8 per 4m10s → 31.5s between ops."""
+        loop = asyncio.get_running_loop()
+        if self._create_gate is None:
+            self._create_gate = asyncio.Lock()
+        async with self._create_gate:
+            now = loop.time()
+            delay = self._next_create_at - now
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self._next_create_at = max(loop.time(), self._next_create_at) + STICKER_CREATE_INTERVAL
+
     def _note_flood(self, wait):
         """Publish a shared cooldown so every pending writer backs off together
         instead of charging in and escalating the penalty (thundering herd)."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._flood_until = max(self._flood_until, loop.time() + wait)
 
     def _expire(self):
@@ -1605,7 +1626,7 @@ class JellyColorMod(loader.Module):
         last_edit=[0.0]  # время последнего edit, общее для всех корутин
 
         async def _update_progress(p, n):
-            now=asyncio.get_event_loop().time()
+            now=asyncio.get_running_loop().time()
             if now - last_edit[0] < 2.0:
                 return
             last_edit[0]=now
@@ -1972,7 +1993,17 @@ class JellyColorMod(loader.Module):
             if not ordered: raise ValueError("Нет стикеров")
             clabel=color or "без перекраски"
             title=s.get("pack_title") or "JellyColor "+clabel
-            fn,err=await _safe_create_set(self._client,me.id,title,pname,ordered,ptype=="emoji",exists_mode=s.get("exists_mode","recreate"))
+            est_min = max(1, -(-len(ordered) // 8)) * 5  # ceil(n/8)*5 мин с запасом
+            try:
+                await call.edit(
+                    text=(pe("⏰",PE["clock"])+f" <b>Создаю пак...</b>\n\n"
+                          f"⚠️ Ограничение Telegram: 8 стикеров / 4 мин.\n"
+                          f"Ожидаемое время: ~<b>{est_min} мин</b> ({len(ordered)} шт.)"),
+                    reply_markup=self._j_markup(uid)
+                )
+            except Exception:
+                pass
+            fn,err=await _safe_create_set(self._client,me.id,title,pname,ordered,ptype=="emoji",exists_mode=s.get("exists_mode","recreate"),throttle_fn=self._throttle_create)
             if err: raise ValueError(err)
 
             links = ["https://t.me/" + ("addemoji/" if ptype=="emoji" else "addstickers/") + name for name in fn]
@@ -1985,13 +2016,9 @@ class JellyColorMod(loader.Module):
             
             # Update lifetime totals
             total_ops = self.db.get("JellyColor", "total_operations", 0)
-            if total_ops == 0 and stats:
-                total_ops = len(stats) - len(fn)
             self.db.set("JellyColor", "total_operations", total_ops + len(fn))
 
             total_st = self.db.get("JellyColor", "total_stickers", 0)
-            if total_st == 0 and stats:
-                total_st = sum(e.get("count",0) for e in stats) - len(ordered) * len(fn)
             self.db.set("JellyColor", "total_stickers", total_st + len(ordered) * len(fn))
 
             self.db.set("JellyColor","stats",stats[-500:])
@@ -2027,6 +2054,7 @@ class JellyColorMod(loader.Module):
         td,tt,_=await self._resolve_target(reply)
         if not td: await utils.answer(message,pe("❌",PE["err"])+" Эмодзи/стикер не найден."); return
         msg=await utils.answer(message,pe("⏰",PE["clock"])+" Создаю...")
+        sn = ""
         try:
             is_emoji=(tt=="emoji")
             buf=await recolor_document(self._client,td,hc,is_emoji=is_emoji)
@@ -2053,10 +2081,9 @@ class JellyColorMod(loader.Module):
                 if isinstance(a,(DocumentAttributeCustomEmoji,DocumentAttributeSticker)):
                     es=getattr(a,"alt",None) or "🎨"; break
             uploaded=await self._client.upload_file(buf,file_name=buf.name)
-            is_emoji=(tt=="emoji")
             item=await _upload_item(self._client,mee,uploaded,mime,es,is_emoji)
             sn="jc"+hc[1:].lower()+"_by_"+_get_bot_suffix(me)
-            final_name,err=await _safe_create_set(self._client,me.id,"JellyColor "+hc,sn,[item],is_emoji)
+            final_name,err=await _safe_create_set(self._client,me.id,"JellyColor "+hc,sn,[item],is_emoji,throttle_fn=self._throttle_create)
             if err: raise ValueError(err)
             final_name_str = final_name[0] if isinstance(final_name, list) else final_name
             link="https://t.me/"+("addemoji/" if is_emoji else "addstickers/")+final_name_str
@@ -2196,6 +2223,9 @@ class JellyColorMod(loader.Module):
         elif step == "font":
             s["step"] = "text"
         elif step == "preview":
+            if s.get("preview_running"):
+                await call.answer("⏳ Подождите окончания генерации предпросмотра.", show_alert=True)
+                return
             s["step"] = "font"
         elif step == "color":
             s["step"] = "preview"
@@ -2333,7 +2363,7 @@ class JellyColorMod(loader.Module):
             except Exception:
                 pass
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             for doc in docs:
                 try:
                     raw = await download_cached(self._client, doc)
@@ -2356,6 +2386,7 @@ class JellyColorMod(loader.Module):
                         img_data = await loop.run_in_executor(None, _process_img)
                         buf = io.BytesIO(img_data)
                         buf.name = "preview_sticker.webp"
+                    await self._throttle_write()
                     up = await self._client.upload_file(buf, file_name=buf.name)
                     await self._client.send_file("me", up, force_document=False)
                 except Exception as e:
@@ -2493,7 +2524,7 @@ class JellyColorMod(loader.Module):
             async def _fn(i,doc):
                 raw=await download_cached(self._client,doc)
                 mime=getattr(doc,"mime_type","")
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 if mime=="application/x-tgsticker":
                     def _process_tgs():
                         lottie_obj = json_loads(gzip.decompress(raw))
@@ -2531,7 +2562,17 @@ class JellyColorMod(loader.Module):
                 self._tsessions.pop(uid,None); return
             color_label=color or "без перекраски"
             pack_title=s.get("pack_title") or txt+" Emoji Pack"
-            fn,err=await _safe_create_set(self._client,me.id,pack_title,pname,ordered,True,exists_mode=s.get("exists_mode","recreate"))
+            est_min = max(1, -(-len(ordered) // 8)) * 5
+            try:
+                await call.edit(
+                    text=(pe("⏰",PE["clock"])+f" <b>Создаю пак...</b>\n\n"
+                          f"⚠️ Ограничение Telegram: 8 эмодзи / 4 мин.\n"
+                          f"Ожидаемое время: ~<b>{est_min} мин</b> ({len(ordered)} шт.)"),
+                    reply_markup=self._jt_markup(uid)
+                )
+            except Exception:
+                pass
+            fn,err=await _safe_create_set(self._client,me.id,pack_title,pname,ordered,True,exists_mode=s.get("exists_mode","recreate"),throttle_fn=self._throttle_create)
             if err: raise ValueError(err)
             
             links = ["https://t.me/addemoji/" + name for name in fn]
@@ -2544,13 +2585,9 @@ class JellyColorMod(loader.Module):
             
             # Update lifetime totals
             total_ops = self.db.get("JellyColor", "total_operations", 0)
-            if total_ops == 0 and stats:
-                total_ops = len(stats) - len(fn)
             self.db.set("JellyColor", "total_operations", total_ops + len(fn))
 
             total_st = self.db.get("JellyColor", "total_stickers", 0)
-            if total_st == 0 and stats:
-                total_st = sum(e.get("count",0) for e in stats) - len(ordered) * len(fn)
             self.db.set("JellyColor", "total_stickers", total_st + len(ordered) * len(fn))
 
             self.db.set("JellyColor","stats",stats[-500:])
@@ -2597,7 +2634,8 @@ class JellyColorMod(loader.Module):
             return
         
         # Ensure directory exists
-        os.makedirs("/root/jelly_fonts", exist_ok=True)
+        fonts_dir = str(Path.home() / "jelly_fonts")
+        os.makedirs(fonts_dir, exist_ok=True)
         
         # We can use MD5 hash of title for filename to avoid collisions and invalid chars
         safe_title = "".join([c for c in args if c.isalnum() or c in (" ", "_", "-")]).strip()
@@ -2607,7 +2645,7 @@ class JellyColorMod(loader.Module):
 
         h = hashlib.md5(safe_title.encode("utf-8")).hexdigest()
         dest_filename = f"{h}{ext}"
-        dest_path = os.path.join("/root/jelly_fonts", dest_filename)
+        dest_path = os.path.join(fonts_dir, dest_filename)
         
         # Check if font with same title already exists
         user_fonts = self.db.get("JellyColor", "user_fonts", [])
@@ -2688,8 +2726,6 @@ class JellyColorMod(loader.Module):
     @loader.command()
     async def jstats(self, message: Message):
         """Статистика операций"""
-        if not hasattr(self, "_stats_sessions"):
-            self._stats_sessions = {}
         stats=self.db.get("JellyColor","stats",[])
         if not stats: await utils.answer(message,pe("📊",PE["stats"])+" Пусто."); return
         uid=message.sender_id
