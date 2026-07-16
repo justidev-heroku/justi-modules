@@ -1389,10 +1389,11 @@ async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, i
     is_tgs=mime=="application/x-tgsticker"
     mt="application/x-tgsticker" if is_tgs else "image/webp"
     fn="sticker.tgs" if is_tgs else "sticker.webp"
-    if is_tgs or is_emoji:
+    if is_tgs:
         extra_attrs=[]
     else:
-        extra_attrs=[types.DocumentAttributeImageSize(w=512,h=512)]
+        sz=100 if is_emoji else 512
+        extra_attrs=[types.DocumentAttributeImageSize(w=sz,h=sz)]
     media=types.InputMediaUploadedDocument(
         file=uploaded,mime_type=mt,
         attributes=[types.DocumentAttributeFilename(file_name=fn),attr]+extra_attrs,
