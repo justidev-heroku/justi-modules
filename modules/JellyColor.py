@@ -38,7 +38,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 7, 9)
+__version__ = (4, 8, 0)
 
 import asyncio
 import glob
