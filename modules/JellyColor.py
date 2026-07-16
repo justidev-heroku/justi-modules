@@ -1353,6 +1353,9 @@ def replace_text_in_tgs(tgs_bytes: bytes, old_text: str, new_text: str, font_pat
 def _recolor_document_sync(data: bytes, mime: str, hex_color: str, is_emoji: bool) -> io.BytesIO:
     if mime=="application/x-tgsticker":
         lottie=json_loads(gzip.decompress(data))
+        if is_emoji:
+            lottie["w"] = 100
+            lottie["h"] = 100
         buf=io.BytesIO(compress_tgs(tint_lottie(lottie,hex_color))); buf.name="sticker.tgs"
     else:
         sz=100 if is_emoji else 512
