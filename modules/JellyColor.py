@@ -38,7 +38,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 8, 0)
+__version__ = (4, 8, 1)
 
 import asyncio
 import glob
@@ -1393,7 +1393,7 @@ async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, i
     mt="application/x-tgsticker" if is_tgs else "image/webp"
     fn="sticker.tgs" if is_tgs else "sticker.webp"
     if is_tgs:
-        extra_attrs=[]
+        extra_attrs=[types.DocumentAttributeAnimated()]
     else:
         sz=100 if is_emoji else 512
         extra_attrs=[types.DocumentAttributeImageSize(w=sz,h=sz)]
@@ -1955,7 +1955,14 @@ class JellyColorMod(loader.Module):
                     # Без перекраски — только ресайз для статичных
                     data=await download_cached(self._client,doc)
                     if orig_mime=="application/x-tgsticker":
-                        buf=io.BytesIO(data); buf.name="sticker.tgs"
+                        if _is_emoji:
+                            lottie=json_loads(gzip.decompress(data))
+                            lottie["w"] = 100
+                            lottie["h"] = 100
+                            buf=io.BytesIO(compress_tgs(lottie))
+                        else:
+                            buf=io.BytesIO(data)
+                        buf.name="sticker.tgs"
                     else:
                         def _process_static():
                             sz=100 if _is_emoji else 512
