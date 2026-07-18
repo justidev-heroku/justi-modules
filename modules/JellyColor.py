@@ -38,7 +38,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 8, 2)
+__version__ = (4, 8, 3)
 
 import asyncio
 import glob
@@ -1353,9 +1353,6 @@ def replace_text_in_tgs(tgs_bytes: bytes, old_text: str, new_text: str, font_pat
 def _recolor_document_sync(data: bytes, mime: str, hex_color: str, is_emoji: bool) -> io.BytesIO:
     if mime=="application/x-tgsticker":
         lottie=json_loads(gzip.decompress(data))
-        if is_emoji:
-            lottie["w"] = 100
-            lottie["h"] = 100
         buf=io.BytesIO(compress_tgs(tint_lottie(lottie,hex_color))); buf.name="sticker.tgs"
     else:
         sz=100 if is_emoji else 512
@@ -1955,14 +1952,7 @@ class JellyColorMod(loader.Module):
                     # Без перекраски — только ресайз для статичных
                     data=await download_cached(self._client,doc)
                     if orig_mime=="application/x-tgsticker":
-                        if _is_emoji:
-                            lottie=json_loads(gzip.decompress(data))
-                            lottie["w"] = 100
-                            lottie["h"] = 100
-                            buf=io.BytesIO(compress_tgs(lottie))
-                        else:
-                            buf=io.BytesIO(data)
-                        buf.name="sticker.tgs"
+                        buf=io.BytesIO(data); buf.name="sticker.tgs"
                     else:
                         def _process_static():
                             sz=100 if _is_emoji else 512
