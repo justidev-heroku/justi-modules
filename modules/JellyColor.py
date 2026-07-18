@@ -38,7 +38,7 @@
 #
 # modification: JellyColor manual scale adjustment and preview feature
 
-__version__ = (4, 8, 1)
+__version__ = (4, 8, 2)
 
 import asyncio
 import glob
@@ -1393,7 +1393,7 @@ async def _upload_item(client, me_entity, uploaded, mime: str, emoji_str: str, i
     mt="application/x-tgsticker" if is_tgs else "image/webp"
     fn="sticker.tgs" if is_tgs else "sticker.webp"
     if is_tgs:
-        extra_attrs=[types.DocumentAttributeAnimated()]
+        extra_attrs=[]
     else:
         sz=100 if is_emoji else 512
         extra_attrs=[types.DocumentAttributeImageSize(w=sz,h=sz)]
