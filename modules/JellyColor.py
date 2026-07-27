@@ -39,7 +39,7 @@
 # modification: JellyColor manual scale adjustment and preview feature
 #               + multi-hex zone recolor (обводка / тело / лого-текст) in .j / .jc
 
-__version__ = (4, 8, 6)
+__version__ = (4, 8, 7)
 
 import asyncio
 import glob
@@ -345,6 +345,55 @@ def _recolor_gradient_stops(raw: list, p: int, nr: float, ng: float, nb: float) 
     return new_raw
 
 
+def _fl_luminance(prop: dict):
+    """Яркость (0..1) плоской заливки fl по её базовому цвету, либо None."""
+    if not isinstance(prop, dict):
+        return None
+    k = prop.get("k")
+    col = None
+    if isinstance(k, list) and len(k) >= 3 and isinstance(k[0], (int, float)):
+        col = k
+    elif isinstance(k, list):
+        for kf in k:  # анимированные keyframes — берём первый
+            if isinstance(kf, dict):
+                s = kf.get("s")
+                if isinstance(s, list) and len(s) >= 3 and isinstance(s[0], (int, float)):
+                    col = s
+                    break
+    if not col:
+        return None
+    return 0.299 * col[0] + 0.587 * col[1] + 0.114 * col[2]
+
+
+# Минимальный разрыв яркостей, чтобы считать заливки двумя разными группами (тело/лого).
+LOGO_SPLIT_MIN_GAP = 0.20
+
+
+def _decide_logo_split(lums: list):
+    """По списку яркостей заливок fl решает, где лого, а где тело.
+
+    Делит на 2 группы по наибольшему разрыву яркости. МЕНЬШАЯ по числу заливок
+    группа считается «лого», бо́льшая — «тело» (авто, устойчиво к инверсии
+    тёмное/светлое). Возвращает предикат is_logo(lum)->bool или None, если
+    выраженного разделения нет (все заливки — одна группа = только тело).
+    """
+    vals = sorted(set(round(l, 4) for l in lums))
+    if len(vals) < 2:
+        return None
+    gap, idx = max((vals[i + 1] - vals[i], i) for i in range(len(vals) - 1))
+    if gap < LOGO_SPLIT_MIN_GAP:
+        return None
+    thr = (vals[idx] + vals[idx + 1]) / 2
+    low = [l for l in lums if l < thr]
+    high = [l for l in lums if l >= thr]
+    if not low or not high:
+        return None
+    # Лого = меньшая по числу заливок группа.
+    if len(high) <= len(low):
+        return lambda lum: lum >= thr   # светлая группа меньше → она лого
+    return lambda lum: lum < thr        # тёмная группа меньше → она лого
+
+
 def tint_lottie(lottie_json: dict, colors) -> dict:
     """
     Перекраска TGS по зонам: fl/gf/sc → тело, st/gs → обводка, text → лого/текст.
@@ -370,6 +419,28 @@ def tint_lottie(lottie_json: dict, colors) -> dict:
     z_stroke = zones["stroke"]
     z_body = zones["body"]
     z_text = zones["text"]
+
+    # Пре-пасс: разделяем заливки fl на тело/лого по яркости (авто).
+    # Актуально только если для лого задан отдельный цвет (z_text отличается от тела),
+    # иначе смысла разделять нет.
+    _is_logo = None
+    if z_text is not None and z_text != z_body:
+        _fl_lums: list = []
+
+        def _scan_fl(o):
+            if isinstance(o, dict):
+                if o.get("ty") == "fl":
+                    lu = _fl_luminance(o.get("c", {}))
+                    if lu is not None:
+                        _fl_lums.append(lu)
+                for v in o.values():
+                    _scan_fl(v)
+            elif isinstance(o, list):
+                for it in o:
+                    _scan_fl(it)
+
+        _scan_fl(lottie_json)
+        _is_logo = _decide_logo_split(_fl_lums)
 
     def _recolor_prop(prop: dict, zc) -> None:
         """Перекрашивает color-property {a, k} — плоский цвет (fl/st).
@@ -443,9 +514,15 @@ def tint_lottie(lottie_json: dict, colors) -> dict:
         if isinstance(obj, dict):
             ty = obj.get("ty", "")
 
-            # Shape fill — плоский цвет → ТЕЛО
+            # Shape fill — плоский цвет → ТЕЛО или ЛОГО (по яркости, если задан z_text)
             if ty == "fl":
-                _recolor_prop(obj.get("c", {}), z_body)
+                prop = obj.get("c", {})
+                zc = z_body
+                if _is_logo is not None:
+                    lu = _fl_luminance(prop)
+                    if lu is not None and _is_logo(lu):
+                        zc = z_text
+                _recolor_prop(prop, zc)
                 return
 
             # Shape stroke — плоский цвет → ОБВОДКА (v2 пропускала!)
