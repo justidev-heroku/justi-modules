@@ -37,8 +37,9 @@
 # requires: Pillow fonttools orjson
 #
 # modification: JellyColor manual scale adjustment and preview feature
+#               + multi-hex zone recolor (обводка / тело / лого-текст) in .j / .jc
 
-__version__ = (4, 8, 3)
+__version__ = (4, 8, 5)
 
 import asyncio
 import glob
@@ -201,11 +202,85 @@ def rgb_to_hex(r: int, g: int, b: int) -> str:
 
 
 
+# ─── Zone colors (multi-hex recolor) ──────────────────────────────────────────
+# Несколько HEX = разные зоны одного стикера:
+#   1-й → обводка (stroke: st/gs), 2-й → тело (fill: fl/gf/sc), 3-й → лого/текст (t).
+
+def _norm_rgb(hex_color: Optional[str]):
+    """HEX → (nr, ng, nb) в диапазоне 0..1, либо None если цвет не задан."""
+    if not hex_color:
+        return None
+    r, g, b = hex_to_rgb(hex_color)
+    return (r / 255, g / 255, b / 255)
+
+
+def zones_from_list(hex_list) -> dict:
+    """Позиционный список HEX (.jc) → зоны по правилам обратной совместимости.
+
+      1 HEX  → всё одним цветом (как было)
+      2 HEX  → обводка = 1-й, тело+лого = 2-й
+      3 HEX  → обводка / тело / лого-текст
+    """
+    cs = [c for c in (hex_list or []) if c]
+    if not cs:
+        return {}
+    c0 = cs[0]
+    body = cs[1] if len(cs) >= 2 else c0
+    text = cs[2] if len(cs) >= 3 else body
+    return {"stroke": c0, "body": body, "text": text}
+
+
+def resolve_zones(colors) -> dict:
+    """Приводит вход к {stroke, body, text}, каждый = (nr,ng,nb) или None (не трогать).
+
+    Принимает:
+      • str            — один цвет на все зоны (обратная совместимость)
+      • list/tuple     — позиционный [обводка, тело, лого] (правила zones_from_list)
+      • dict           — явные зоны {stroke/body/text: HEX или None}; None = зона не красится
+      • None / пусто   — ничего не красим
+    """
+    if isinstance(colors, str):
+        c = _norm_rgb(colors)
+        return {"stroke": c, "body": c, "text": c}
+    if isinstance(colors, (list, tuple)):
+        colors = zones_from_list(colors)
+    if isinstance(colors, dict):
+        return {
+            "stroke": _norm_rgb(colors.get("stroke")),
+            "body": _norm_rgb(colors.get("body")),
+            "text": _norm_rgb(colors.get("text")),
+        }
+    return {"stroke": None, "body": None, "text": None}
+
+
+def parse_hex_list(text: str) -> list:
+    """Из строки аргументов вытаскивает 1..3 валидных HEX (позиционно, .jc).
+
+    Токены-разделители — пробелы/запятые. Невалидные игнорируются, дубли
+    убираются, порядок сохраняется: [обводка, тело, лого].
+    """
+    out: list = []
+    for tok in re.split(r"[\s,]+", (text or "").strip()):
+        if not tok:
+            continue
+        h = tok if tok.startswith("#") else "#" + tok
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", h):
+            hu = "#" + h[1:].upper()
+            if hu not in out:
+                out.append(hu)
+    return out[:3]
+
+
 # ─── Image tinting ────────────────────────────────────────────────────────────
 
-def tint_image(img: Image.Image, hex_color: str) -> Image.Image:
-    r_target, g_target, b_target = hex_to_rgb(hex_color)
+def tint_image(img: Image.Image, colors) -> Image.Image:
+    # Растровый webp не имеет слоёв → красим цветом «тела» (fallback: обводка/лого).
+    zones = resolve_zones(colors)
+    zc = zones["body"] or zones["stroke"] or zones["text"]
     img = img.convert("RGBA")
+    if zc is None:
+        return img
+    r_target, g_target, b_target = int(zc[0] * 255), int(zc[1] * 255), int(zc[2] * 255)
     r, g, b, ao = img.split()
     max_rg = ImageChops.lighter(r, g)
     val = ImageChops.lighter(max_rg, b)
@@ -258,9 +333,12 @@ def _recolor_gradient_stops(raw: list, p: int, nr: float, ng: float, nb: float) 
     return new_raw
 
 
-def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
+def tint_lottie(lottie_json: dict, colors) -> dict:
     """
-    Полная перекраска TGS: fl, st, gf, gs (включая анимированные keyframes).
+    Перекраска TGS по зонам: fl/gf/sc → тело, st/gs → обводка, text → лого/текст.
+
+    `colors` — str (один цвет на всё), list [обводка, тело, лого] или
+    dict {stroke, body, text} (None = зону не трогаем). См. resolve_zones().
 
     v3 fixes:
       • Stroke (ty=st) — v2 вообще не красила
@@ -276,10 +354,12 @@ def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
       v3 пыталась патчить 'e' которого нет → анимированные цвета не красились.
       v3.1: патчит 's' всегда; 'e' — только если присутствует (AE < 2022).
     """
-    r, g, b = hex_to_rgb(hex_color)
-    nr, ng, nb = r / 255, g / 255, b / 255
+    zones = resolve_zones(colors)
+    z_stroke = zones["stroke"]
+    z_body = zones["body"]
+    z_text = zones["text"]
 
-    def _recolor_prop(prop: dict) -> None:
+    def _recolor_prop(prop: dict, zc) -> None:
         """Перекрашивает color-property {a, k} — плоский цвет (fl/st).
 
         Поддерживает оба формата Lottie:
@@ -287,8 +367,9 @@ def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
           - Новый (AE >= 2022): keyframes только с полем s (без e)
             В новом формате «end value» следующего keyframe = s следующего kf.
         """
-        if not isinstance(prop, dict):
+        if zc is None or not isinstance(prop, dict):
             return
+        nr, ng, nb = zc
         k = prop.get("k")
         if k is None:
             return
@@ -310,7 +391,7 @@ def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
                     if isinstance(val_e, list) and len(val_e) >= 3 and isinstance(val_e[0], (int, float)):
                         kf["e"] = _recolor_rgb(val_e, nr, ng, nb)
 
-    def _recolor_grad_obj(g_obj: dict) -> None:
+    def _recolor_grad_obj(g_obj: dict, zc) -> None:
         """
         Перекрашивает gradient-объект {p, k} из gf/gs.
         g_obj["p"] — количество цветовых стопов (нужно для разделения цвет/альфа).
@@ -320,8 +401,9 @@ def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
           - Старый: keyframes с s и e
           - Новый (AE >= 2022): keyframes только с s (нет поля e)
         """
-        if not isinstance(g_obj, dict):
+        if zc is None or not isinstance(g_obj, dict):
             return
+        nr, ng, nb = zc
         p = int(g_obj.get("p", 0))
         if p == 0:
             return
@@ -349,29 +431,30 @@ def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
         if isinstance(obj, dict):
             ty = obj.get("ty", "")
 
-            # Shape fill — плоский цвет
+            # Shape fill — плоский цвет → ТЕЛО
             if ty == "fl":
-                _recolor_prop(obj.get("c", {}))
+                _recolor_prop(obj.get("c", {}), z_body)
                 return
 
-            # Shape stroke — плоский цвет (v2 пропускала!)
+            # Shape stroke — плоский цвет → ОБВОДКА (v2 пропускала!)
             if ty == "st":
-                _recolor_prop(obj.get("c", {}))
+                _recolor_prop(obj.get("c", {}), z_stroke)
                 return
 
-            # Gradient fill (v2 пропускала; v3 учитывает g.p для альфа-стопов)
+            # Gradient fill → ТЕЛО (v3 учитывает g.p для альфа-стопов)
             if ty == "gf":
-                _recolor_grad_obj(obj.get("g"))
+                _recolor_grad_obj(obj.get("g"), z_body)
                 return
 
-            # Gradient stroke (v2 пропускала)
+            # Gradient stroke → ОБВОДКА (v2 пропускала)
             if ty == "gs":
-                _recolor_grad_obj(obj.get("g"))
+                _recolor_grad_obj(obj.get("g"), z_stroke)
                 return
 
-            # Solid color layer: поле "sc" = "#rrggbb" (layer ty=1 в Lottie — число)
+            # Solid color layer: поле "sc" = "#rrggbb" → ТЕЛО
             sc_val = obj.get("sc")
-            if isinstance(sc_val, str) and sc_val.startswith("#"):
+            if z_body is not None and isinstance(sc_val, str) and sc_val.startswith("#"):
+                nr, ng, nb = z_body
                 try:
                     sr, sg, sb = hex_to_rgb(sc_val)
                     gray = 0.299 * sr/255 + 0.587 * sg/255 + 0.114 * sb/255
@@ -383,9 +466,10 @@ def tint_lottie(lottie_json: dict, hex_color: str) -> dict:
                 except Exception:
                     pass
 
-            # Text layer: t.d.k[i].s.fc (fill color) и .sc (stroke color)
+            # Text layer: t.d.k[i].s.fc / .sc → ЛОГО/ТЕКСТ
             t_obj = obj.get("t")
-            if isinstance(t_obj, dict):
+            if z_text is not None and isinstance(t_obj, dict):
+                nr, ng, nb = z_text
                 d_obj = t_obj.get("d")
                 if isinstance(d_obj, dict):
                     for kf in d_obj.get("k", []):
@@ -1350,26 +1434,27 @@ def replace_text_in_tgs(tgs_bytes: bytes, old_text: str, new_text: str, font_pat
 
 # ─── Recolor helpers ──────────────────────────────────────────────────────────
 
-def _recolor_document_sync(data: bytes, mime: str, hex_color: str, is_emoji: bool) -> io.BytesIO:
+def _recolor_document_sync(data: bytes, mime: str, colors, is_emoji: bool) -> io.BytesIO:
     if mime=="application/x-tgsticker":
         lottie=json_loads(gzip.decompress(data))
-        buf=io.BytesIO(compress_tgs(tint_lottie(lottie,hex_color))); buf.name="sticker.tgs"
+        buf=io.BytesIO(compress_tgs(tint_lottie(lottie,colors))); buf.name="sticker.tgs"
     else:
         sz=100 if is_emoji else 512
         img=Image.open(io.BytesIO(data)).convert("RGBA")
         if img.size != (sz, sz):
             img = img.resize((sz,sz),Image.LANCZOS)
-        buf=io.BytesIO(); tint_image(img,hex_color).save(buf,format="WEBP",lossless=True)
+        buf=io.BytesIO(); tint_image(img,colors).save(buf,format="WEBP",lossless=True)
         buf.seek(0); buf.name="sticker.webp"
     buf.seek(0)
     return buf
 
 
-async def recolor_document(client, doc, hex_color: str, is_emoji: bool = False) -> io.BytesIO:
+async def recolor_document(client, doc, colors, is_emoji: bool = False) -> io.BytesIO:
+    """`colors` — str / list [обводка,тело,лого] / dict зон. См. resolve_zones()."""
     data=await download_cached(client,doc)
     mime=getattr(doc,"mime_type","")
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _recolor_document_sync, data, mime, hex_color, is_emoji)
+    return await loop.run_in_executor(None, _recolor_document_sync, data, mime, colors, is_emoji)
 
 
 def validate_short_name(name: str) -> bool:
@@ -1742,20 +1827,50 @@ class JellyColorMod(loader.Module):
         self._sessions[uid]={"ts":time.time(),"type":tt,"doc":td,"set_id":ts,
             "set_short":getattr(full_set.set,"short_name",""),"full_set":full_set,"pack_count":pc,
             "scope":None,"color":None,"pack_name":None,
+            "zones":{"stroke":None,"body":None,"text":None},"zone_idx":0,
             "step":"scope" if pc>1 else "color"}
         await message.delete()
         await self.inline.form(text=self._j_text(uid),reply_markup=self._j_markup(uid),message=message,always_allow=[uid])
+
+    # Зоны перекраски (порядок = как задаёт пользователь: 1 обводка, 2 тело, 3 лого/текст)
+    _J_ZONES = [("stroke", "🖊 Обводка"), ("body", "🎨 Тело"), ("text", "🔤 Лого / текст")]
+
+    def _j_cur_zone(self, s):
+        """Текущая зона выбора цвета (key, label) по zone_idx."""
+        return self._J_ZONES[s.get("zone_idx", 0)]
+
+    def _j_zones_summary(self, s):
+        """Строка со сводкой уже выбранных зон для показа пользователю."""
+        z = s.get("zones", {})
+        parts = []
+        for key, label in self._J_ZONES:
+            v = z.get(key)
+            parts.append(f"{label}: <code>{v}</code>" if v else f"{label}: <i>—</i>")
+        return "\n".join(parts)
+
+    def _j_advance_zone(self, s):
+        """Переход к следующей зоне; после последней — фиксируем цвет и шаг «title»."""
+        s["zone_idx"] = s.get("zone_idx", 0) + 1
+        if s["zone_idx"] >= len(self._J_ZONES):
+            z = s.get("zones", {})
+            # Представительный цвет для истории/названия — тело, иначе обводка/лого.
+            s["color"] = z.get("body") or z.get("stroke") or z.get("text")
+            s["step"] = "title"
 
     def _j_text(self,uid):
         s=self._sessions[uid]; step=s["step"]
         if step=="scope": return pe("🖤",PE["brush"])+f" <b>Что перекрасить?</b>\n\nПак <code>{s['set_short']}</code> — <b>{s['pack_count']}</b> шт."
         if step=="color":
             sc="один стикер" if s["scope"]=="one" else f"весь пак ({s['pack_count']} шт.)"
+            _key,zlabel=self._j_cur_zone(s)
+            idx=s.get("zone_idx",0)+1; total=len(self._J_ZONES)
             hint = pe("⏰",PE["clock"])+" Сверху — недавние цвета для быстрого повтора." if self._color_history() else ""
-            return pe("🖋",PE["palette"])+f" <b>Выберите цвет</b>\n\nЧто красим: <b>{sc}</b>\n{hint}"
+            return (pe("🖋",PE["palette"])+f" <b>Цвет зоны {idx}/{total}: {zlabel}</b>\n\n"
+                    f"Что красим: <b>{sc}</b>\n\n{self._j_zones_summary(s)}\n\n"
+                    f"<i>Выберите цвет для этой зоны или «⏭ Пропустить» (оставить исходный).</i>\n{hint}")
         if step=="title":
-            label=f"<code>{s['color'] or 'без перекраски'}</code>"
-            return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\nЦвет: {label}\n\n<i>Введите название или нажмите «Авто» — короткое имя подберётся само.</i>"
+            label=self._j_zones_summary(s) if any((s.get("zones") or {}).values()) else "<i>без перекраски</i>"
+            return pe("🏷",PE["sticker"])+f" <b>Название пака</b>\n\n{label}\n\n<i>Введите название или нажмите «Авто» — короткое имя подберётся само.</i>"
         if step=="name":
             return pe("🏷",PE["sticker"])+f" <b>Короткое имя (short_name)</b>\n\nНазвание: <b>{s.get('pack_title','')}</b>\n\n<i>Введите короткое имя (a-z, 0-9, _) или нажмите «Сгенерировать».</i>"
         if step=="exists_choice":
@@ -1779,9 +1894,12 @@ class JellyColorMod(loader.Module):
             for r in rows:
                 for btn in r:
                     btn["emoji_id"] = btn.get("icon_custom_emoji_id")
-                    if "HEX" in btn["text"] or "Без перекраски" in btn["text"]:
+                    if "Без перекраски" in btn["text"]:
+                        btn["text"] = "⏭ Пропустить зону"
+                    if "HEX" in btn["text"] or "Пропустить" in btn["text"]:
                         btn["style"] = "primary"
-            if pc > 1:
+            # «Назад» доступна на любой зоне после первой (или при выборе scope)
+            if pc > 1 or s.get("zone_idx", 0) > 0:
                 rows.append([{"text": "⬅️ Назад", "icon_custom_emoji_id": PE["back"],"emoji_id":PE["back"],"style":"danger","callback":self._j_back,"args":(uid,)}])
             return rows
         if step=="title": return [
@@ -1818,13 +1936,20 @@ class JellyColorMod(loader.Module):
         step = s["step"]
         pc = s.get("pack_count", 1)
         if step == "color":
-            if pc > 1:
+            if s.get("zone_idx", 0) > 0:
+                # Возврат к предыдущей зоне (сбрасываем её выбор)
+                s["zone_idx"] -= 1
+                key, _ = self._j_cur_zone(s)
+                s["zones"][key] = None
+            elif pc > 1:
                 s["step"] = "scope"
             else:
                 await call.answer("Назад вернуться нельзя (первый шаг).", show_alert=True)
                 return
         elif step == "title":
+            # Возврат к последней зоне выбора цвета
             s["step"] = "color"
+            s["zone_idx"] = len(self._J_ZONES) - 1
         elif step == "name":
             s["step"] = "title"
         elif step == "exists_choice":
@@ -1844,19 +1969,23 @@ class JellyColorMod(loader.Module):
     async def _j_s1(self,call,uid):
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["scope"]="one"; s["step"]="color"
+        s["scope"]="one"; s["step"]="color"; s["zone_idx"]=0
+        s["zones"]={"stroke":None,"body":None,"text":None}
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_sa(self,call,uid):
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["scope"]="all"; s["step"]="color"
+        s["scope"]="all"; s["step"]="color"; s["zone_idx"]=0
+        s["zones"]={"stroke":None,"body":None,"text":None}
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_col(self,call,uid,hex_color):
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["color"]=hex_color; s["step"]="title"
+        key,_=self._j_cur_zone(s)
+        s["zones"][key]=hex_color.upper()
+        self._j_advance_zone(s)
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_hex(self,call,value,uid):
@@ -1865,13 +1994,18 @@ class JellyColorMod(loader.Module):
         c=value.strip()
         if not c.startswith("#"): c="#"+c
         if not re.fullmatch(r"#[0-9a-fA-F]{6}",c): await call.answer("Неверный HEX.",show_alert=True); return
-        s["color"]=c.upper(); s["step"]="title"
+        key,_=self._j_cur_zone(s)
+        s["zones"][key]=c.upper()
+        self._j_advance_zone(s)
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_no_color(self,call,uid):
+        # «Пропустить зону» — оставить исходный цвет этой зоны (None) и идти дальше.
         s=self._sessions.get(uid)
         if not s: await call.answer("Сессия устарела.",show_alert=True); return
-        s["color"]=None; s["step"]="title"
+        key,_=self._j_cur_zone(s)
+        s["zones"][key]=None
+        self._j_advance_zone(s)
         await call.edit(text=self._j_text(uid),reply_markup=self._j_markup(uid))
 
     async def _j_auto(self,call,uid):
@@ -1939,15 +2073,16 @@ class JellyColorMod(loader.Module):
         s=self._sessions.get(uid)
         if not s: return
         try:
-            color=s["color"]; pname=s["pack_name"]; ptype=s["type"]
+            zones=s.get("zones") or {}; has_recolor=any(zones.values())
+            pname=s["pack_name"]; ptype=s["type"]
             docs=[s["doc"]] if (s["scope"]=="one" or s["pack_count"]==1) else list(s["full_set"].documents)
             me=await self._client.get_me(); mee=await self._client.get_input_entity("me")
             async def _fn(i,doc):
                 _is_emoji=(ptype=="emoji")
                 orig_mime=getattr(doc,"mime_type","image/webp")
                 mime="application/x-tgsticker" if orig_mime=="application/x-tgsticker" else "image/webp"
-                if color:
-                    buf=await recolor_document(self._client,doc,color,is_emoji=_is_emoji)
+                if has_recolor:
+                    buf=await recolor_document(self._client,doc,zones,is_emoji=_is_emoji)
                 else:
                     # Без перекраски — только ресайз для статичных
                     data=await download_cached(self._client,doc)
@@ -1992,7 +2127,9 @@ class JellyColorMod(loader.Module):
                 return await _upload_item(self._client,mee,up,mime,es,ptype=="emoji")
             ordered=await self._parallel(docs,_fn,"Перекраска",call,reply_markup=self._j_markup(uid))
             if not ordered: raise ValueError("Нет стикеров")
-            clabel=color or "без перекраски"
+            # Представительный цвет для истории (валидный #hex), полная сводка — для показа.
+            clabel=s.get("color") or "без перекраски"
+            zsum=" ".join(v for v in (zones.get("stroke"),zones.get("body"),zones.get("text")) if v) or "без перекраски"
             title=s.get("pack_title") or "JellyColor "+clabel
             est_min = max(1, -(-len(ordered) // 8)) * 5  # ceil(n/8)*5 мин с запасом
             try:
@@ -2024,7 +2161,7 @@ class JellyColorMod(loader.Module):
 
             self.db.set("JellyColor","stats",stats[-500:])
             tl="Стикерпак" if ptype=="sticker" else "Эмодзи-пак"
-            tag=f"<code>{clabel}</code>"
+            tag=f"<code>{zsum}</code>"
             await call.edit(
                 text=(pe("✅",PE["ok"])+" <b>Готово!</b>\n\n"
                       +pe("🖤",PE["brush"])+f" {tl} → {tag}\n"
@@ -2045,20 +2182,21 @@ class JellyColorMod(loader.Module):
 
     @loader.command()
     async def jc(self, message: Message):
-        """Быстрая перекраска с созданием пака из 1 эмодзи: .jc #HEX (ответьте на эмодзи/стикер)"""
+        """Быстрая перекраска: .jc #обводка #тело #лого (1-3 цвета, ответьте на эмодзи/стикер)"""
         reply=await message.get_reply_message()
         args=utils.get_args_raw(message).strip()
         if not reply or not args:
-            await utils.answer(message,pe("ℹ️",PE["info"])+" Ответьте на эмодзи и напишите <code>.jc #FF3B30</code>"); return
-        hc=args if args.startswith("#") else "#"+args
-        if not re.fullmatch(r"#[0-9a-fA-F]{6}",hc): await utils.answer(message,pe("❌",PE["err"])+" Неверный HEX"); return
+            await utils.answer(message,pe("ℹ️",PE["info"])+" Ответьте на эмодзи и напишите <code>.jc #FF3B30</code>\n\n<i>Можно 1-3 цвета: <code>.jc #обводка #тело #лого</code></i>"); return
+        hexes=parse_hex_list(args)
+        if not hexes: await utils.answer(message,pe("❌",PE["err"])+" Неверный HEX"); return
+        hc=hexes[0]
         td,tt,_=await self._resolve_target(reply)
         if not td: await utils.answer(message,pe("❌",PE["err"])+" Эмодзи/стикер не найден."); return
         msg=await utils.answer(message,pe("⏰",PE["clock"])+" Создаю...")
         sn = ""
         try:
             is_emoji=(tt=="emoji")
-            buf=await recolor_document(self._client,td,hc,is_emoji=is_emoji)
+            buf=await recolor_document(self._client,td,hexes,is_emoji=is_emoji)
             
             # Save a copy to /tmp for debugging
             def _write_debug(buf_val, bname):
@@ -2083,8 +2221,9 @@ class JellyColorMod(loader.Module):
                     es=getattr(a,"alt",None) or "🎨"; break
             uploaded=await self._client.upload_file(buf,file_name=buf.name)
             item=await _upload_item(self._client,mee,uploaded,mime,es,is_emoji)
-            sn="jc"+hc[1:].lower()+"_by_"+_get_bot_suffix(me)
-            final_name,err=await _safe_create_set(self._client,me.id,"JellyColor "+hc,sn,[item],is_emoji,throttle_fn=self._throttle_create)
+            sn="jc"+"".join(h[1:].lower() for h in hexes)+"_by_"+_get_bot_suffix(me)
+            ptitle="JellyColor "+" ".join(hexes)
+            final_name,err=await _safe_create_set(self._client,me.id,ptitle,sn,[item],is_emoji,throttle_fn=self._throttle_create)
             if err: raise ValueError(err)
             final_name_str = final_name[0] if isinstance(final_name, list) else final_name
             link="https://t.me/"+("addemoji/" if is_emoji else "addstickers/")+final_name_str
@@ -2961,4 +3100,3 @@ class JellyColorMod(loader.Module):
         await self._client.send_file(message.chat_id,bd,caption=f"📄 Dump <code>{eid}</code>",parse_mode="HTML")
         await self._client.send_file(message.chat_id,br)
         await msg.delete()
-
