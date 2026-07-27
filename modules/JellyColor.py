@@ -39,7 +39,7 @@
 # modification: JellyColor manual scale adjustment and preview feature
 #               + multi-hex zone recolor (обводка / тело / лого-текст) in .j / .jc
 
-__version__ = (4, 8, 7)
+__version__ = (4, 8, 8)
 
 import asyncio
 import glob
@@ -372,10 +372,13 @@ LOGO_SPLIT_MIN_GAP = 0.20
 def _decide_logo_split(lums: list):
     """По списку яркостей заливок fl решает, где лого, а где тело.
 
-    Делит на 2 группы по наибольшему разрыву яркости. МЕНЬШАЯ по числу заливок
-    группа считается «лого», бо́льшая — «тело» (авто, устойчиво к инверсии
-    тёмное/светлое). Возвращает предикат is_logo(lum)->bool или None, если
-    выраженного разделения нет (все заливки — одна группа = только тело).
+    Делит на 2 группы по наибольшему разрыву яркости и применяет ФИКСИРОВАННУЮ
+    полярность: СВЕТЛАЯ группа = «лого», ТЁМНАЯ = «тело». Так надёжнее счётчика
+    заливок (тот инвертирует, когда светлых заливок случайно больше — напр.
+    детальный светлый логотип на тёмном теле). Возвращает предикат
+    is_logo(lum)->bool или None, если выраженного разделения нет.
+
+    Допущение: тело темнее лого (у стикеров CardHouse-стиля так всегда).
     """
     vals = sorted(set(round(l, 4) for l in lums))
     if len(vals) < 2:
@@ -384,14 +387,7 @@ def _decide_logo_split(lums: list):
     if gap < LOGO_SPLIT_MIN_GAP:
         return None
     thr = (vals[idx] + vals[idx + 1]) / 2
-    low = [l for l in lums if l < thr]
-    high = [l for l in lums if l >= thr]
-    if not low or not high:
-        return None
-    # Лого = меньшая по числу заливок группа.
-    if len(high) <= len(low):
-        return lambda lum: lum >= thr   # светлая группа меньше → она лого
-    return lambda lum: lum < thr        # тёмная группа меньше → она лого
+    return lambda lum: lum >= thr  # светлые заливки = лого, тёмные = тело
 
 
 def tint_lottie(lottie_json: dict, colors) -> dict:
