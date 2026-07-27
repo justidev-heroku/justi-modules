@@ -39,7 +39,7 @@
 # modification: JellyColor manual scale adjustment and preview feature
 #               + multi-hex zone recolor (обводка / тело / лого-текст) in .j / .jc
 
-__version__ = (4, 8, 5)
+__version__ = (4, 8, 6)
 
 import asyncio
 import glob
@@ -295,13 +295,27 @@ def tint_image(img: Image.Image, colors) -> Image.Image:
 
 # ─── Lottie tinting ───────────────────────────────────────────────────────────
 
+# Заливки темнее этого порога (near-black) красим ПОЛНЫМ целевым цветом:
+# grayscale-умножение (цвет × ~0) оставило бы их чёрными. Остальное — тонируем,
+# сохраняя штриховку/блики как оттенки целевого цвета.
+RECOLOR_DARK_THRESHOLD = 0.15
+
+
+def _tinted(nr: float, ng: float, nb: float, gray: float):
+    """(r,g,b): near-black (gray < порога) → полный целевой цвет, иначе тонирование."""
+    if gray < RECOLOR_DARK_THRESHOLD:
+        return nr, ng, nb
+    return nr * gray, ng * gray, nb * gray
+
+
 def _recolor_rgb(val: list, nr: float, ng: float, nb: float) -> list:
-    """Перекрашивает [r,g,b] или [r,g,b,a] через grayscale-умножение. Alpha сохраняется."""
+    """Перекрашивает [r,g,b] или [r,g,b,a]. Near-black → целевой цвет, иначе тон. Alpha сохраняется."""
     if len(val) < 3 or not isinstance(val[0], (int, float)):
         return val
     gray = 0.299 * val[0] + 0.587 * val[1] + 0.114 * val[2]
     alpha = val[3] if len(val) > 3 else 1.0
-    return [nr * gray, ng * gray, nb * gray, alpha]
+    r, g, b = _tinted(nr, ng, nb, gray)
+    return [r, g, b, alpha]
 
 
 def _recolor_gradient_stops(raw: list, p: int, nr: float, ng: float, nb: float) -> list:
@@ -325,9 +339,7 @@ def _recolor_gradient_stops(raw: list, p: int, nr: float, ng: float, nb: float) 
     while i + 3 < color_len:
         off = new_raw[i]
         gray = 0.299 * new_raw[i+1] + 0.587 * new_raw[i+2] + 0.114 * new_raw[i+3]
-        new_raw[i+1] = nr * gray
-        new_raw[i+2] = ng * gray
-        new_raw[i+3] = nb * gray
+        new_raw[i+1], new_raw[i+2], new_raw[i+3] = _tinted(nr, ng, nb, gray)
         i += 4
     # Alpha-блок (индексы color_len..end) — не трогаем
     return new_raw
@@ -458,11 +470,8 @@ def tint_lottie(lottie_json: dict, colors) -> dict:
                 try:
                     sr, sg, sb = hex_to_rgb(sc_val)
                     gray = 0.299 * sr/255 + 0.587 * sg/255 + 0.114 * sb/255
-                    obj["sc"] = rgb_to_hex(
-                        int(nr * gray * 255),
-                        int(ng * gray * 255),
-                        int(nb * gray * 255),
-                    )
+                    tr, tg, tb = _tinted(nr, ng, nb, gray)
+                    obj["sc"] = rgb_to_hex(int(tr * 255), int(tg * 255), int(tb * 255))
                 except Exception:
                     pass
 
@@ -481,7 +490,8 @@ def tint_lottie(lottie_json: dict, colors) -> dict:
                                     if isinstance(col, list) and len(col) >= 3:
                                         gray = 0.299 * col[0] + 0.587 * col[1] + 0.114 * col[2]
                                         alpha = col[3] if len(col) > 3 else 1.0
-                                        s_obj[field] = [nr*gray, ng*gray, nb*gray, alpha]
+                                        tr, tg, tb = _tinted(nr, ng, nb, gray)
+                                        s_obj[field] = [tr, tg, tb, alpha]
 
             # Рекурсия по остальным полям
             for v in obj.values():
