@@ -1,4 +1,4 @@
-# meta developer: Max
+# meta developer: @justidev
 
 from .. import loader, utils
 
