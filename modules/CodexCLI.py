@@ -129,7 +129,7 @@ class CodexCLI(loader.Module):
     strings = {
         "name": "CodexCLI",
         "cfg_codex_path_doc": "Путь до бинарника codex. При необходимости укажите полный путь.",
-        "cfg_codex_model_doc": "Модель для Codex CLI (например gpt-5.4).",
+        "cfg_codex_model_doc": "Модель для Codex CLI (например gpt-6-astra или gpt-5.6-sol).",
         "cfg_cli_backend_doc": "CLI backend: codex.",
         "cfg_auth_type_doc": "Провайдер авторизации: только codex-login.",
         "cfg_openai_api_key_doc": "API key для Codex/OpenAI-совместимого endpoint.",
@@ -449,12 +449,13 @@ class CodexCLI(loader.Module):
         "automod_status_off": "<tg-emoji emoji-id=5253780051471642059>🛡</tg-emoji> Automod: <b>OFF</b>",
         "cfg_check_title": "<tg-emoji emoji-id=5256230583717079814>📋</tg-emoji> <b>CodexCLI · Проверка конфигурации</b>",
         "codex_models_note": (
-            "<tg-emoji emoji-id=5256230583717079814>📋</tg-emoji> <b>Актуальный список (на 2026-04-20):</b>\n"
-            "• <code>gpt-5.4</code> — основной выбор для сложных coding/agent задач\n"
-            "• <code>gpt-5.4-mini</code> — быстрее и дешевле\n"
-            "• <code>gpt-5.4-nano</code> — минимальная стоимость/задержка\n"
-            "• <code>gpt-5.4-pro</code> — максимум качества для сложных кейсов\n"
-            "• <code>gpt-5.2</code> и <code>gpt-5.2-pro</code> — совместимость/legacy сценарии\n\n"
+            "<tg-emoji emoji-id=5256230583717079814>📋</tg-emoji> <b>Актуальный список (на 2026-09-12):</b>\n"
+            "• <code>gpt-6-astra</code> — новейший флагман: максимум для computer-use и сложных multistep-агентов\n"
+            "• <code>gpt-5.6-sol</code> — топ reasoning для сложных coding/agent задач (алиас <code>gpt-5.6</code>)\n"
+            "• <code>gpt-5.6-terra</code> — сбалансированный, практичный для большинства задач\n"
+            "• <code>gpt-5.6-luna</code> — быстрый и дешёвый для простых/частых запросов\n"
+            "• <code>gpt-5.4</code> / <code>gpt-5.4-mini</code> / <code>gpt-5.4-nano</code> / <code>gpt-5.4-pro</code> — предыдущее поколение\n"
+            "• <code>gpt-5.2</code>, <code>gpt-5.2-pro</code> — legacy/совместимость\n\n"
             "Можно указывать и любой другой валидный model id вашего endpoint."
         ),
         "resource_profile_usage": "<b>Использование:</b> <code>.cdxperf off|medium|max</code>",
@@ -521,7 +522,7 @@ class CodexCLI(loader.Module):
             ),
             loader.ConfigValue(
                 "codex_model",
-                "gpt-5.4",
+                "gpt-5.6-sol",
                 self.strings["cfg_codex_model_doc"],
                 validator=loader.validators.String(),
             ),
@@ -1647,7 +1648,7 @@ class CodexCLI(loader.Module):
     async def _build_codex_cli_status_box(self) -> str:
         native_status = self._read_last_native_status_snapshot()
         version = native_status.get("version") or await self._get_codex_cli_version()
-        model = (self.config.get("codex_model") or "gpt-5.3-codex").strip()
+        model = (self.config.get("codex_model") or "gpt-5.6-sol").strip()
         reasoning = (self.config.get("reasoning_mode") or "medium").strip().lower()
         workspace_dir = self._get_slash_workspace_dir()
         home_dir = os.path.expanduser("~")
